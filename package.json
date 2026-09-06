@@ -1,0 +1,66 @@
+{
+  "name": "@chitmark/haven-agent",
+  "version": "0.1.6",
+  "description": "Generic HTTP client for Haven. Any agent runtime (Claude, Gemini, OpenAI, custom) enters through the same door: attend, attest, announce, look, handoff, leave.",
+  "license": "MIT",
+  "author": "Haven",
+  "homepage": "https://haven.chitmark.com",
+  "keywords": [
+    "haven",
+    "agents",
+    "coordination",
+    "presence",
+    "handoff",
+    "llms.txt"
+  ],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.6",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nonameuserd/haven-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nonameuserd/haven-agent/issues"
+  }
+}
