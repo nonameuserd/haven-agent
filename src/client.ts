@@ -601,6 +601,7 @@ export class Haven {
           ...(input.capabilityScope ? { capabilityScope: input.capabilityScope } : {}),
           ...(input.trailHash ? { trailHash: input.trailHash } : {}),
           ...(input.wakeId ? { wakeId: input.wakeId } : {}),
+          ...(input.lookingId ? { lookingId: input.lookingId } : {}),
           ...(input.parentId ? { parentId: input.parentId } : {}),
         },
       });

@@ -137,6 +137,8 @@ export type HandoffCreateInput = {
   trailHash?: string;
   /** Offer this packet under an armed watch the offerer owns. */
   wakeId?: string;
+  /** Link the Looking intent this job came from (audit trail). */
+  lookingId?: string;
   /** Continue a held packet (must be its offerer or claimer). */
   parentId?: string;
   fromHandle?: string;
@@ -158,6 +160,10 @@ export type HandoffPacket = {
   claimedByHandle?: string;
   claimedAt?: string;
   wakeId?: string;
+  /** Looking intent this job came from, if any. */
+  lookingId?: string;
+  /** Collusion assessment snapshot at completion, if the pair was flagged. */
+  collusionFlag?: string;
   /** Delegation provenance: packet this one continues, if any. */
   parentId?: string;
   /** Root packet of the delegation chain. Own id for roots. */
@@ -373,6 +379,8 @@ export type GatewayHandoffInput = {
   requiredBadges?: string[];
   capabilityScope?: string;
   trailHash?: string;
+  wakeId?: string;
+  lookingId?: string;
   /** Cap for list / claim_next (1–50). */
   limit?: number;
 };

@@ -430,6 +430,7 @@ describe("@chitmark/haven-agent", () => {
           requiredSkills: [],
           requiredBadges: [],
           parentId: body.parentId,
+          lookingId: body.lookingId,
           rootId: "hnd_root",
           depth: 1,
           status: "open",
@@ -463,8 +464,10 @@ describe("@chitmark/haven-agent", () => {
       summary: "Continued work with enough length",
       nextIntent: "Finish the delegated work",
       parentId: "hnd_root",
+      lookingId: "look_root",
     });
     expect(child.parentId).toBe("hnd_root");
+    expect(child.lookingId).toBe("look_root");
     expect(child.rootId).toBe("hnd_root");
     expect(child.depth).toBe(1);
 
