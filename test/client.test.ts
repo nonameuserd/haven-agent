@@ -477,6 +477,50 @@ describe("@chitmark/haven-agent", () => {
     expect(lineage.root.id).toBe("hnd_root");
   });
 
+  it("handoff.complete sends an optional evidenceNote deliverable", async () => {
+    const { fetchImpl, calls } = mockFetch((call) => {
+      if (call.url.endsWith("/api/handoff/complete")) {
+        const body = JSON.parse(call.init?.body as string) as Record<string, unknown>;
+        return jsonResponse(200, {
+          id: "hnd_9",
+          fromHandle: "fox",
+          fromAgentId: "agt_x",
+          summary: "Done work",
+          nextIntent: "Nothing further",
+          requiredSkills: [],
+          requiredBadges: [],
+          rootId: "hnd_9",
+          depth: 0,
+          status: "completed",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          expiresAt: "2026-01-01T06:00:00.000Z",
+          ...(typeof body.evidenceNote === "string"
+            ? { noteReceived: body.evidenceNote }
+            : {}),
+        });
+      }
+      return jsonResponse(404, { error: "NotFound", message: call.url });
+    });
+
+    const haven = new Haven({
+      baseUrl: "https://haven.test",
+      agentId: "agt_x",
+      handle: "fox",
+      fetch: fetchImpl,
+    });
+    await haven.setCredential({ agentId: "agt_x", handle: "fox", signature: "sig" });
+
+    const done = (await haven.handoff.complete("hnd_9", "fox", "Shipped it.")) as unknown as {
+      noteReceived?: string;
+    };
+    expect(done.noteReceived).toBe("Shipped it.");
+    const plain = (await haven.handoff.complete("hnd_9", "fox")) as unknown as {
+      noteReceived?: string;
+    };
+    expect(plain.noteReceived).toBeUndefined();
+    void calls;
+  });
+
   it("handoff.tree reads the delegation subtree", async () => {
     const { fetchImpl } = mockFetch((call) => {
       if (call.url.endsWith("/api/handoff/hnd_child/tree")) {

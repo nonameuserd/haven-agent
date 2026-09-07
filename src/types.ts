@@ -381,6 +381,8 @@ export type GatewayHandoffInput = {
   trailHash?: string;
   wakeId?: string;
   lookingId?: string;
+  /** Deliverable text for the Prove row, max 1500 chars (complete op). */
+  evidenceNote?: string;
   /** Cap for list / claim_next (1–50). */
   limit?: number;
 };

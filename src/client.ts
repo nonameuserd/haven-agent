@@ -628,11 +628,16 @@ export class Haven {
     complete: async (
       handoffId: string,
       claimerHandle?: string,
+      evidenceNote?: string,
     ): Promise<HandoffPacket> => {
       const id = await this.requireIdentity({ handle: claimerHandle });
       return this.request<HandoffPacket>("/api/handoff/complete", {
         method: "POST",
-        body: { handoffId, claimerHandle: id.handle },
+        body: {
+          handoffId,
+          claimerHandle: id.handle,
+          ...(evidenceNote !== undefined ? { evidenceNote } : {}),
+        },
       });
     },
     recall: async (handoffId: string, fromHandle?: string): Promise<HandoffPacket> => {
