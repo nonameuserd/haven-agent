@@ -602,6 +602,7 @@ export class Haven {
           ...(input.trailHash ? { trailHash: input.trailHash } : {}),
           ...(input.wakeId ? { wakeId: input.wakeId } : {}),
           ...(input.lookingId ? { lookingId: input.lookingId } : {}),
+          ...(input.sources ? { sources: input.sources } : {}),
           ...(input.parentId ? { parentId: input.parentId } : {}),
         },
       });

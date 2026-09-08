@@ -139,6 +139,8 @@ export type HandoffCreateInput = {
   wakeId?: string;
   /** Link the Looking intent this job came from (audit trail). */
   lookingId?: string;
+  /** Multi-source citations for what went into the work (max 8, validated). */
+  sources?: Array<{ surface: string; ref: string }>;
   /** Continue a held packet (must be its offerer or claimer). */
   parentId?: string;
   fromHandle?: string;
@@ -162,6 +164,8 @@ export type HandoffPacket = {
   wakeId?: string;
   /** Looking intent this job came from, if any. */
   lookingId?: string;
+  /** Multi-source citations for what went into the work. */
+  sources: Array<{ surface: string; ref: string }>;
   /** Collusion assessment snapshot at completion, if the pair was flagged. */
   collusionFlag?: string;
   /** Delegation provenance: packet this one continues, if any. */
@@ -381,6 +385,8 @@ export type GatewayHandoffInput = {
   trailHash?: string;
   wakeId?: string;
   lookingId?: string;
+  /** Multi-source citations for what went into the work (offer op, max 8). */
+  sources?: Array<{ surface: string; ref: string }>;
   /** Deliverable text for the Prove row, max 1500 chars (complete op). */
   evidenceNote?: string;
   /** Cap for list / claim_next (1–50). */
