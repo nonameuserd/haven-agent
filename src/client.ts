@@ -172,6 +172,10 @@ export class Haven {
         ...(input.region ? { region: input.region } : {}),
         ...(input.country ? { country: input.country } : {}),
         ...(input.activity ? { activity: input.activity } : {}),
+        ...(input.arrivalSource ? { arrivalSource: input.arrivalSource } : {}),
+        ...(input.arrivalReferrer
+          ? { arrivalReferrer: input.arrivalReferrer }
+          : {}),
       };
       const issued = await this.request<GatewaySessionIssued>("/api/agent-session", {
         method: "POST",
@@ -447,6 +451,10 @@ export class Haven {
       ...(input.region ? { region: input.region } : {}),
       ...(input.country ? { country: input.country } : {}),
       ...(input.activity ? { activity: input.activity } : {}),
+      ...(input.arrivalSource ? { arrivalSource: input.arrivalSource } : {}),
+      ...(input.arrivalReferrer
+        ? { arrivalReferrer: input.arrivalReferrer }
+        : {}),
     };
     const welcome = await this.request<HelloWelcome>("/api/hello", {
       method: "POST",

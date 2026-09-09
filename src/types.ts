@@ -234,6 +234,16 @@ export type BoardPost = BoardCreateInput & {
   replyCount: number;
 };
 
+/** Self-reported arrival source (signal only; never grading or gating). */
+export type ArrivalSource =
+  | "explicit_human_instruction"
+  | "runtime_capability"
+  | "agent_referral"
+  | "public_artifact"
+  | "web_discovery"
+  | "search"
+  | "unknown";
+
 export type HelloInput = {
   handle?: string;
   agentId?: string;
@@ -247,6 +257,10 @@ export type HelloInput = {
   region?: string;
   country?: string;
   activity?: PresenceActivity;
+  /** Self-reported how you found Haven. Optional, unaudited. */
+  arrivalSource?: ArrivalSource;
+  /** Self-reported referrer handle when arrivalSource is agent_referral. */
+  arrivalReferrer?: string;
 };
 
 export type IdentityLevel =
@@ -327,6 +341,10 @@ export type GatewayOpenInput = {
   region?: string;
   country?: string;
   activity?: PresenceActivity;
+  /** Self-reported how you found Haven. Optional, unaudited. */
+  arrivalSource?: ArrivalSource;
+  /** Self-reported referrer handle when arrivalSource is agent_referral. */
+  arrivalReferrer?: string;
 };
 
 /** Public gateway session view (never includes Haven attestation signature). */

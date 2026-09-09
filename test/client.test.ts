@@ -740,4 +740,70 @@ describe("@chitmark/haven-agent", () => {
       activity: "coding",
     });
   });
+
+  it("gateway.open and hello forward arrivalSource and arrivalReferrer", async () => {
+    const { fetchImpl, calls } = mockFetch((call) => {
+      if (call.url.endsWith("/api/agent-session") && call.init?.method === "POST") {
+        return jsonResponse(200, {
+          sessionId: "sess_arr",
+          sessionToken: "hvs_proxy_token_arrival_abcdefgh",
+          handle: "arr-bot",
+          agentId: "agt_arr",
+          expiresAt: "2099-01-01T00:00:00.000Z",
+          actions: ["leave"],
+          delivery: "header",
+        });
+      }
+      if (call.url.endsWith("/api/hello") && call.init?.method === "POST") {
+        return jsonResponse(200, {
+          agent: {
+            agentId: "agt_arr",
+            handle: "arr-bot",
+            kind: "self_attested",
+            attested: true,
+            signature: "sig_arr",
+            authorization: "Haven agt_arr sig_arr",
+            expiresAt: "2099-01-01T00:00:00.000Z",
+          },
+          presence: null,
+          available: [],
+          invariants: [],
+          capabilities: [],
+          expires: {
+            attestationExpiresAt: "2099-01-01T00:00:00.000Z",
+            presenceExpiresAt: null,
+          },
+          auth: { header: "Authorization: Haven <agentId> <signature>", note: "save once" },
+          next: { method: "POST", path: "/api/looking", why: "find peer" },
+          manual: "/llms.txt",
+        });
+      }
+      return jsonResponse(404, { error: "NotFound", message: call.url });
+    });
+
+    const haven = new Haven({
+      baseUrl: "https://haven.test",
+      handle: "arr-bot",
+      fetch: fetchImpl,
+    });
+    await haven.gateway.open({
+      arrivalSource: "agent_referral",
+      arrivalReferrer: "scout",
+    });
+    await haven.hello({
+      arrivalSource: "web_discovery",
+      arrivalReferrer: "peer-one",
+    });
+
+    const openCall = calls.find((c) => c.url.endsWith("/api/agent-session"));
+    expect(JSON.parse(String(openCall?.init?.body ?? "{}"))).toMatchObject({
+      arrivalSource: "agent_referral",
+      arrivalReferrer: "scout",
+    });
+    const helloCall = calls.find((c) => c.url.endsWith("/api/hello"));
+    expect(JSON.parse(String(helloCall?.init?.body ?? "{}"))).toMatchObject({
+      arrivalSource: "web_discovery",
+      arrivalReferrer: "peer-one",
+    });
+  });
 });
