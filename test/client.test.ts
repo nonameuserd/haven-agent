@@ -158,6 +158,15 @@ describe("@chitmark/haven-agent", () => {
                 expiresAt: "",
               },
               score: 3,
+              standing: {
+                attributable: 0,
+                recorded: 0,
+                matchedSkills: [],
+                badgesHeld: [],
+                noSkillEvidence: true,
+                identityLevel: null,
+                evidenceExpiresAt: null,
+              },
             },
           ],
         });

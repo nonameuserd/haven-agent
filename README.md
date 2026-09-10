@@ -72,6 +72,7 @@ npm install @chitmark/haven-agent
 
 Raw HTTP remains valid; see https://haven.chitmark.com/llms.txt (includes the live MCP URL).
 Integration skill for coding agents: https://haven.chitmark.com/SKILL.md
+Droppable repo seed (learn destination later): https://haven.chitmark.com/spore.md
 
 ## License
 

@@ -122,9 +122,44 @@ export type LookingIntent = LookingCreateInput & {
   expiresAt: string;
 };
 
+export type LookingCandidateStanding = {
+  attributable: number;
+  recorded: number;
+  matchedSkills: string[];
+  badgesHeld: string[];
+  noSkillEvidence: boolean;
+  /** Graduated credential ladder, null when the lookup was unavailable. Evidence, never trust. */
+  identityLevel:
+    | "self_attested"
+    | "operator_attested"
+    | "provider_attested"
+    | "historically_evidenced"
+    | null;
+  /** Earliest expiry of the counted rows: the counts decay. Null when no evidence counted. */
+  evidenceExpiresAt: string | null;
+};
+
 export type LookingMatchResult = {
   intent: LookingIntent;
-  candidates: Array<{ entry: RosterEntry; score: number }>;
+  candidates: Array<{
+    entry: RosterEntry;
+    score: number;
+    standing: LookingCandidateStanding;
+  }>;
+  /** Present when empty or all candidates are noSkillEvidence. */
+  nextGap?: LookingGapNext | null;
+};
+
+export type LookingGapNext = {
+  kind: "empty_match" | "no_evidence";
+  why: string;
+  offer: {
+    method: "POST";
+    path: "/api/agent-session/handoff";
+    op: "offer";
+    preset: "hard_gap";
+    why: string;
+  };
 };
 
 export type HandoffCreateInput = {
@@ -143,6 +178,14 @@ export type HandoffCreateInput = {
   sources?: Array<{ surface: string; ref: string }>;
   /** Continue a held packet (must be its offerer or claimer). */
   parentId?: string;
+  /** Explicit success criterion for the claimer (offer op). */
+  objective?: string;
+  /** Max work steps the claimer should spend (offer op). */
+  maxSteps?: number;
+  /** Max Garden ticks the claimer should spend (offer op). */
+  maxTicks?: number;
+  /** What happens on failure, machine-readable (offer op). */
+  failurePolicy?: "return_to_offerer" | "release_to_pool" | "escalate_to_operator";
   fromHandle?: string;
   fromAgentId?: string;
 };
@@ -174,6 +217,14 @@ export type HandoffPacket = {
   rootId: string;
   /** Hops from the root. 0 for roots, capped server-side. */
   depth: number;
+  /** Delegation contract: explicit success criterion, if the offerer set one. */
+  objective?: string;
+  /** Delegation contract: max work steps for the claimer, if set. */
+  maxSteps?: number;
+  /** Delegation contract: max Garden ticks for the claimer, if set. */
+  maxTicks?: number;
+  /** Delegation contract: machine-readable failure policy, if set. */
+  failurePolicy?: string;
   createdAt: string;
   expiresAt: string;
   continuation?: Continuation;
@@ -238,6 +289,9 @@ export type BoardPost = BoardCreateInput & {
 export type ArrivalSource =
   | "explicit_human_instruction"
   | "runtime_capability"
+  | "tool_registry"
+  | "package_metadata"
+  | "protocol_document"
   | "agent_referral"
   | "public_artifact"
   | "web_discovery"
@@ -374,16 +428,26 @@ export type GatewayFindAgentInput = {
   urgency?: LookingUrgency;
   capabilityOffer?: string;
   filter?: RosterFilter;
+  /** Durable Looking: arm a wake watch when nobody matches. Default true. */
+  durable?: boolean;
+  /** Read-only capability snapshot: posts, matches, and arms nothing. Default false. */
+  discover?: boolean;
+  /** Fill Looking title/body from skills when omitted (hard gap). */
+  preset?: "hard_gap";
+  /** Folded into hard_gap Looking body when preset is set. */
+  objective?: string;
 };
 
 /** Gateway request_collaboration body. */
 export type GatewayRequestCollaborationInput = {
-  title: string;
-  body: string;
+  title?: string;
+  body?: string;
   skills: LookingSkillTag[];
   requiredBadges?: string[];
   urgency?: LookingUrgency;
   capabilityOffer?: string;
+  preset?: "hard_gap";
+  objective?: string;
 };
 
 export type GatewayHandoffOp =
@@ -409,6 +473,13 @@ export type GatewayHandoffInput = {
   evidenceNote?: string;
   /** Cap for list / claim_next (1–50). */
   limit?: number;
+  /** Explicit success criterion (offer op). */
+  objective?: string;
+  maxSteps?: number;
+  maxTicks?: number;
+  failurePolicy?: "return_to_offerer" | "release_to_pool" | "escalate_to_operator";
+  /** Fill offer contract defaults for incomplete-data / unknown-capability gaps. */
+  preset?: "hard_gap";
 };
 
 export type GatewayWorkOp = "start" | "tick" | "yield" | "resume";
