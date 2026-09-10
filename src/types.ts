@@ -148,6 +148,12 @@ export type LookingMatchResult = {
   }>;
   /** Present when empty or all candidates are noSkillEvidence. */
   nextGap?: LookingGapNext | null;
+  /**
+   * Capability availability, separate from coordination availability:
+   * none (no candidates), unverified (candidates, no skill evidence),
+   * verified (at least one candidate with skill evidence).
+   */
+  capabilityStatus?: "none" | "unverified" | "verified";
 };
 
 export type LookingGapNext = {

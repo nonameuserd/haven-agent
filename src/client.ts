@@ -897,26 +897,81 @@ export class Haven {
     },
     /**
      * Sleep until a bounded event matters: POST /api/wake/:id/wait (auth).
-     * Blocks up to timeoutSeconds (1-30, default 10). Returns a tiny event
-     * reference (why + next), never a content dump.
+     * Edge wait runs only a few internal polls (subrequest budget); this
+     * client re-POSTs until `timeoutSeconds` elapses, an event fires, or the
+     * watch is cancelled/consumed/expired. Matches MCP `wake_wait` behavior
+     * so agents do not abandon after the first idle response (L19-C3 / DX).
      */
     wait: async (
       wakeId: string,
       opts: { handle?: string; timeoutSeconds?: number } = {},
     ): Promise<WakeWaitResult> => {
       const id = await this.requireIdentity({ handle: opts.handle });
-      return this.request<WakeWaitResult>(
-        `/api/wake/${encodeURIComponent(wakeId)}/wait`,
-        {
-          method: "POST",
-          body: {
-            handle: id.handle,
-            ...(opts.timeoutSeconds !== undefined
-              ? { timeoutSeconds: opts.timeoutSeconds }
-              : {}),
-          },
-        },
+      const timeoutSeconds = Math.min(
+        Math.max(
+          typeof opts.timeoutSeconds === "number"
+            ? Math.floor(opts.timeoutSeconds)
+            : 10,
+          1,
+        ),
+        30,
       );
+      const deadline = Date.now() + timeoutSeconds * 1000;
+      let lastIdle: WakeWaitResult | null = null;
+      const terminalOf = (message: string): WakeWaitResult["status"] | null => {
+        const m = message.toLowerCase();
+        if (m.includes("consumed")) return "consumed";
+        if (m.includes("cancelled")) return "cancelled";
+        if (m.includes("expired")) return "expired";
+        return null;
+      };
+      while (true) {
+        const remainingSec = Math.max(
+          1,
+          Math.ceil((deadline - Date.now()) / 1000),
+        );
+        let result: WakeWaitResult;
+        try {
+          result = await this.request<WakeWaitResult>(
+            `/api/wake/${encodeURIComponent(wakeId)}/wait`,
+            {
+              method: "POST",
+              body: {
+                handle: id.handle,
+                timeoutSeconds: Math.min(remainingSec, 30),
+              },
+            },
+          );
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          const terminal = terminalOf(msg);
+          if (terminal && lastIdle) {
+            return { ...lastIdle, triggered: false, status: terminal };
+          }
+          if (terminal) {
+            return {
+              wakeId,
+              triggered: false,
+              status: terminal,
+              expiresAt: new Date().toISOString(),
+              remainingEvents: 0,
+            };
+          }
+          throw e;
+        }
+        if (result.triggered) return result;
+        lastIdle = result;
+        if (
+          result.status === "cancelled" ||
+          result.status === "consumed" ||
+          result.status === "expired"
+        ) {
+          return result;
+        }
+        if (Date.now() >= deadline) return result;
+        // Edge already slept inside the prior wait; yield briefly then re-POST.
+        await new Promise((r) => setTimeout(r, 50));
+      }
     },
     /** Ack events (all pending when eventIds omitted). Fulfilled watches are consumed. */
     ack: async (

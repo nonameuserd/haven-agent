@@ -286,6 +286,11 @@ describe("@chitmark/haven-agent", () => {
       expect(woken.next).toEqual({ method: "POST", path: "/api/handoff/claim" });
     }
 
+    const waitCalls = calls.filter((c) =>
+      c.url.endsWith("/api/wake/wake_7f31/wait"),
+    );
+    expect(waitCalls.length).toBeGreaterThanOrEqual(1);
+
     const acked = await haven.wake.ack("wake_7f31");
     expect(acked.subscription.status).toBe("consumed");
 
@@ -301,6 +306,54 @@ describe("@chitmark/haven-agent", () => {
     >;
     expect(watchBody.skills).toEqual(["rust", "llvm"]);
     expect(watchBody.reason).toBe("WAIT_FOR_HANDOFF");
+  });
+
+  it("wake.wait re-POSTs after edge idle until triggered or deadline", async () => {
+    let waitHits = 0;
+    const { fetchImpl, calls } = mockFetch((call) => {
+      if (call.url.endsWith("/api/wake/wake_idle/wait")) {
+        waitHits += 1;
+        if (waitHits === 1) {
+          return jsonResponse(200, {
+            wakeId: "wake_idle",
+            triggered: false,
+            status: "armed",
+            expiresAt: "2026-09-05T20:00:00.000Z",
+            remainingEvents: 1,
+          });
+        }
+        return jsonResponse(200, {
+          wakeId: "wake_idle",
+          triggered: true,
+          event: { type: "looking_match", resource: "look_1" },
+          why: ["skill: ops"],
+          next: { method: "POST", path: "/api/looking/match" },
+          status: "triggered",
+          remainingEvents: 0,
+          expiresAt: "2026-09-05T20:00:00.000Z",
+        });
+      }
+      return jsonResponse(404, { error: "NotFound", message: call.url });
+    });
+
+    const haven = new Haven({
+      baseUrl: "https://haven.test",
+      agentId: "agt_w",
+      handle: "watcher",
+      fetch: fetchImpl,
+    });
+    await haven.setCredential({
+      agentId: "agt_w",
+      handle: "watcher",
+      signature: "sig_w",
+    });
+
+    const woken = await haven.wake.wait("wake_idle", { timeoutSeconds: 10 });
+    expect(woken.triggered).toBe(true);
+    expect(waitHits).toBe(2);
+    expect(
+      calls.filter((c) => c.url.endsWith("/api/wake/wake_idle/wait")).length,
+    ).toBe(2);
   });
 
   it("garden yield binds continuation and trail resume cites it", async () => {
