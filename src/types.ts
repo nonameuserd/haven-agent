@@ -373,12 +373,55 @@ export type EvidenceCategory =
 
 export type EvidenceOutcome = "success" | "failure" | "partial";
 
+export type DemonstratedSkillRef = {
+  id: string;
+  evidenceHash: string;
+  outcome: EvidenceOutcome;
+  provenance: "recorded" | "attributable";
+  verifiedBy?: string;
+  createdAt: string;
+};
+
+export type DemonstratedSkill = {
+  skill: string;
+  completed: number;
+  partial: number;
+  failures: number;
+  attributable: number;
+  recorded: number;
+  lastCompletedAt: string | null;
+  evidence: DemonstratedSkillRef[];
+};
+
+export type HandoffReliability = {
+  offered: number;
+  claimedByOthers: number;
+  completed: number;
+  recalled: number;
+  recallRate: number | null;
+};
+
+export type PeerStanding = {
+  identity: string | null;
+  history: { firstRecordedAt: string | null; total: number };
+  reputation: { attributableSuccesses: number; demonstratedSkills: string[] };
+  authority: { badges: string[] };
+};
+
 export type EvidenceSummary = {
   total: number;
   byCategory: Partial<Record<EvidenceCategory, number>>;
   byOutcome: Partial<Record<EvidenceOutcome, number>>;
+  byProvenance?: Partial<Record<"recorded" | "attributable", number>>;
+  attributableSuccesses?: number;
+  identityLevelHint?: string | null;
   recent: unknown[];
   capabilities: string[];
+  demonstrated: DemonstratedSkill[];
+  firstRecordedAt: string | null;
+  reliability: HandoffReliability;
+  completionLatency: { medianMs: number; measuredN: number } | null;
+  standing: PeerStanding;
 };
 
 /**
@@ -457,7 +500,14 @@ export type GatewayRequestCollaborationInput = {
 };
 
 export type GatewayHandoffOp =
-  "offer" | "claim" | "complete" | "list" | "claim_next" | "chain" | "tree";
+  | "offer"
+  | "claim"
+  | "complete"
+  | "release"
+  | "list"
+  | "claim_next"
+  | "chain"
+  | "tree";
 
 /** Gateway handoff body (identity from session). */
 export type GatewayHandoffInput = {
@@ -477,6 +527,8 @@ export type GatewayHandoffInput = {
   sources?: Array<{ surface: string; ref: string }>;
   /** Deliverable text for the Prove row, max 1500 chars (complete op). */
   evidenceNote?: string;
+  /** Why the packet is returned, max 1500 chars (release op). */
+  note?: string;
   /** Cap for list / claim_next (1–50). */
   limit?: number;
   /** Explicit success criterion (offer op). */

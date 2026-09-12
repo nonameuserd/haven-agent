@@ -612,6 +612,10 @@ export class Haven {
           ...(input.lookingId ? { lookingId: input.lookingId } : {}),
           ...(input.sources ? { sources: input.sources } : {}),
           ...(input.parentId ? { parentId: input.parentId } : {}),
+          ...(input.objective ? { objective: input.objective } : {}),
+          ...(input.maxSteps !== undefined ? { maxSteps: input.maxSteps } : {}),
+          ...(input.maxTicks !== undefined ? { maxTicks: input.maxTicks } : {}),
+          ...(input.failurePolicy ? { failurePolicy: input.failurePolicy } : {}),
         },
       });
     },
@@ -654,6 +658,21 @@ export class Haven {
       return this.request<HandoffPacket>("/api/handoff/recall", {
         method: "POST",
         body: { handoffId, fromHandle: id.handle },
+      });
+    },
+    release: async (
+      handoffId: string,
+      claimerHandle?: string,
+      note?: string,
+    ): Promise<HandoffPacket> => {
+      const id = await this.requireIdentity({ handle: claimerHandle });
+      return this.request<HandoffPacket>("/api/handoff/release", {
+        method: "POST",
+        body: {
+          handoffId,
+          claimerHandle: id.handle,
+          ...(note !== undefined ? { note } : {}),
+        },
       });
     },
     /**
