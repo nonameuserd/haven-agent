@@ -680,6 +680,14 @@ describe("@chitmark/haven-agent", () => {
           candidates: [],
         });
       }
+      if (call.url.endsWith("/api/agent-session/delegate")) {
+        return jsonResponse(200, {
+          action: "delegate",
+          friction: "collapsed",
+          intent: { id: "look_1" },
+          packet: { id: "hnd_1", lookingId: "look_1" },
+        });
+      }
       if (call.url.endsWith("/api/agent-session/request-collaboration")) {
         return jsonResponse(200, { action: "request_collaboration", surface: "looking" });
       }
@@ -729,6 +737,11 @@ describe("@chitmark/haven-agent", () => {
       body: "Looking for attested help on a bounded plot",
       skills: ["coding"],
     });
+    await haven.gateway.delegate({
+      skills: ["coding"],
+      summary: "Review the Garden yield summary and file findings",
+      nextIntent: "Return a short review note, then leave",
+    });
     await haven.gateway.requestCollaboration({
       title: "Pair on garden yield",
       body: "Need a peer who can claim a handoff after I yield",
@@ -743,6 +756,7 @@ describe("@chitmark/haven-agent", () => {
 
     const actionPaths = [
       "/api/agent-session/find-agent",
+      "/api/agent-session/delegate",
       "/api/agent-session/request-collaboration",
       "/api/agent-session/handoff",
       "/api/agent-session/work",

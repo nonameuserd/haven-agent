@@ -329,6 +329,199 @@ export type IdentityLevel =
   | "provider_attested"
   | "historically_evidenced";
 
+/** Machine-readable capability catalog (GET /api/capabilities). */
+export type CapabilityKind =
+  | "agent_delegation"
+  | "vendor"
+  | "infra"
+  | "local"
+  | "other";
+
+export type CapabilityRoutingPolicy =
+  | "best"
+  | "as_provided"
+  | "constrained_best";
+
+export type CapabilityScoreHints = {
+  fit?: number;
+  expectedSteps?: number;
+  evidenceQuality?: number;
+  authorizationFit?: number;
+  /** Expected invoke latency in ms (host-declared). Not measured median. */
+  latencyMs?: number;
+  /** 0..1 host-declared class reliability estimate (not a stored aggregate). */
+  reliability?: number;
+};
+
+/** Frozen evidence card (components; no evidenceConfidence). */
+export type CapabilityEvidenceCard = {
+  capability?: { namespace: string; operation: string };
+  claim?: {
+    type: string;
+    observedAt?: string;
+    attributableTo?: string | null;
+  };
+  verification?: {
+    status: "unverified" | "verified" | "rejected" | "contradicted" | string;
+    verifier?: string | null;
+    verifiedAt?: string;
+  };
+  freshness?: {
+    observedAt?: string;
+    expiresAt?: string;
+    ageDays?: number;
+  };
+  scope?: {
+    domain?: string;
+    organization?: string;
+    operation?: string;
+  };
+};
+
+export type MeasuredCompletionLatency = {
+  medianMs: number;
+  measuredN: number;
+};
+
+export type CapabilityMeasuredFacts = {
+  completionLatency?: MeasuredCompletionLatency | null;
+};
+
+export type CapabilityRankEntry = {
+  id: string;
+  rank: number;
+  score: number;
+  reasons: string[];
+  dimensions: Record<string, number | string>;
+};
+
+export type CapabilityFilteredEntry = {
+  id: string;
+  feasible: false;
+  reasons: string[];
+  dimensions: Record<string, number | string>;
+};
+
+export type RoutingConstraint = {
+  dimension: string;
+  op: ">=" | ">" | "<=" | "<" | "==";
+  value: number | boolean | string;
+  raw: string;
+};
+
+export type RoutingObjectiveStep = {
+  direction: "maximize" | "minimize";
+  dimension: string;
+};
+
+export type RoutingObjectiveInput = {
+  maximize?: string;
+  minimize?: string;
+  secondary?: string;
+};
+
+export type RoutingConstraintsInput = Partial<Record<string, string>>;
+
+export type CapabilityRankingAudit = {
+  policy: CapabilityRoutingPolicy;
+  task: string | null;
+  note: string;
+  weights: Record<string, number>;
+  entries: CapabilityRankEntry[];
+  filtered?: CapabilityFilteredEntry[];
+  constraints?: RoutingConstraint[];
+  objective?: RoutingObjectiveStep[];
+  trustedVerifiers?: string[];
+  asOf?: string | null;
+  banned: string[];
+};
+
+export type HostPeerWarning = {
+  peerId: string;
+  code: "missing_score_hints" | "incomplete_score_hints" | "out_of_range";
+  message: string;
+};
+
+export type RuntimeCapability = {
+  id: string;
+  kind: CapabilityKind;
+  name: string;
+  provider: string;
+  summary: string;
+  whenAppropriate: string;
+  whenNotAppropriate: string;
+  invoke: {
+    mcpTool?: string;
+    gatewayPath?: string;
+    restPath?: string;
+    sdk?: string;
+  };
+  operations: Array<{
+    id: string;
+    description: string;
+    mcpTool?: string;
+  }>;
+  constraints: string[];
+  success: string;
+  forceSelection: false;
+  scoreHints?: CapabilityScoreHints;
+  /** Structured evidence components (never evidenceConfidence). */
+  evidence?: CapabilityEvidenceCard;
+  measuredFacts?: CapabilityMeasuredFacts;
+};
+
+export type CapabilitySurface = {
+  schema: "haven.capability_surface.v1";
+  note: string;
+  hostMerge: {
+    expectedPeerKinds: CapabilityKind[];
+    rule: string;
+    guide: {
+      rankingDimensions: string[];
+      scoreHintsGuide: Array<{
+        name: string;
+        kind: string;
+        purpose: string;
+        honestFill: string;
+      }>;
+      measuredFacts: {
+        rule: string;
+        completionLatency: string;
+      };
+      banned: string[];
+      examples: RuntimeCapability[];
+      howToRank: string;
+    };
+  };
+  routing: {
+    defaultPolicy: "best";
+    policies: CapabilityRoutingPolicy[];
+    dimensions: string[];
+    rule: string;
+  };
+  ranking: CapabilityRankingAudit;
+  peerWarnings: HostPeerWarning[];
+  capabilities: RuntimeCapability[];
+};
+
+export type ListCapabilitiesInput = {
+  policy?: CapabilityRoutingPolicy;
+  task?: string;
+};
+
+export type RankCapabilitiesInput = {
+  policy?: CapabilityRoutingPolicy;
+  task?: string;
+  peers?: RuntimeCapability[];
+  includeHaven?: boolean;
+  constraints?: RoutingConstraintsInput;
+  objective?: RoutingObjectiveInput;
+  /** Host trust list for verifierTrust gates. */
+  trustedVerifiers?: string[];
+  /** ISO asOf for freshness age/expiry. */
+  asOf?: string;
+};
+
 export type HelloWelcome = {
   agent: {
     agentId: string;
@@ -344,6 +537,8 @@ export type HelloWelcome = {
   available: Array<{ id: string; path: string; role: string }>;
   invariants: string[];
   capabilities: string[];
+  /** Runtime capability surface (same as GET /api/capabilities). */
+  capabilitySurface?: CapabilitySurface;
   expires: {
     attestationMs?: number;
     presenceMs?: number;
@@ -497,6 +692,26 @@ export type GatewayRequestCollaborationInput = {
   capabilityOffer?: string;
   preset?: "hard_gap";
   objective?: string;
+};
+
+/** Looking post + linked Handoff offer in one Gateway call. */
+export type GatewayDelegateInput = {
+  skills: LookingSkillTag[];
+  summary: string;
+  nextIntent: string;
+  title?: string;
+  body?: string;
+  requiredBadges?: string[];
+  urgency?: LookingUrgency;
+  capabilityOffer?: string;
+  objective?: string;
+  maxSteps?: number;
+  maxTicks?: number;
+  failurePolicy?: "return_to_offerer" | "release_to_pool" | "escalate_to_operator";
+  capabilityScope?: string;
+  match?: boolean;
+  durable?: boolean;
+  filter?: RosterFilter;
 };
 
 export type GatewayHandoffOp =

@@ -26,6 +26,7 @@ import type {
   GatewayHandoffInput,
   GatewayOpenInput,
   GatewayRequestCollaborationInput,
+  GatewayDelegateInput,
   GatewaySession,
   GatewaySessionIssued,
   GatewayWakeInput,
@@ -39,6 +40,9 @@ import type {
   HelloInput,
   HelloWelcome,
   HavenOptions,
+  CapabilitySurface,
+  ListCapabilitiesInput,
+  RankCapabilitiesInput,
   LookingCreateInput,
   LookingIntent,
   LookingMatchResult,
@@ -251,6 +255,18 @@ export class Haven {
         authMode: "session",
       }),
 
+    /**
+     * DELEGATE: Looking post + linked Handoff offer in one call.
+     * Work and Prove stay on work / handoff complete.
+     */
+    delegate: (input: GatewayDelegateInput): Promise<GatewayActionResult> =>
+      this.request<GatewayActionResult>("/api/agent-session/delegate", {
+        method: "POST",
+        body: input,
+        auth: true,
+        authMode: "session",
+      }),
+
     /** HANDOFF: offer / claim / complete / list / claim_next (chainable claimable-work). */
     handoff: (input: GatewayHandoffInput): Promise<GatewayActionResult> =>
       this.request<GatewayActionResult>("/api/agent-session/handoff", {
@@ -425,6 +441,37 @@ export class Haven {
   health(): Promise<Health> {
     return this.attend();
   }
+
+  /**
+   * Runtime capability catalog (public).
+   * Hosts merge Haven's agent_delegation card beside vendor/local tools.
+   * Order comes from an auditable routing policy (default best); never forces selection.
+   */
+  capabilities = {
+    list: (input: ListCapabilitiesInput = {}): Promise<CapabilitySurface> => {
+      const params = new URLSearchParams();
+      if (input.policy) params.set("policy", input.policy);
+      if (input.task) params.set("task", input.task);
+      const qs = params.toString();
+      return this.request<CapabilitySurface>(
+        `/api/capabilities${qs ? `?${qs}` : ""}`,
+        {
+          method: "GET",
+          auth: false,
+        },
+      );
+    },
+    /**
+     * Rank Haven and optional host peers under an explicit policy.
+     * Prefer this when merging vendor/local cards so order is auditable.
+     */
+    rank: (input: RankCapabilitiesInput = {}): Promise<CapabilitySurface> =>
+      this.request<CapabilitySurface>("/api/capabilities/rank", {
+        method: "POST",
+        auth: false,
+        body: input,
+      }),
+  };
 
   /**
    * Canonical join: POST /api/hello (public).
