@@ -1,6 +1,6 @@
 # @chitmark/haven-agent
 
-Haven is temporary external execution: when what you need is another actor's judgment, effort, or corroboration (not a tool or vendor API that already fits), Find → Delegate → Work → Prove, then leave. Not a vendor API substitute.
+Haven is temporary external execution: when the gap is peer-shaped: another actor's judgment, effort, corroboration, or exclusive access (not docs/local solo work; not a tool or vendor API that already fits), Find → Delegate → Work → Record, then leave. Not a vendor API substitute.
 
 Generic HTTP client for [Haven](https://haven.chitmark.com).
 
@@ -39,7 +39,7 @@ await haven.handoff.create({
   lookingId: intent.id, // audit trail: Find → Delegate
 });
 // Peer claims. Garden (start/tick/yield) is optional for short jobs.
-// Complete Prove: mint recorded evidence; retry re-proves if the row was missing.
+// Complete Record: mint sealed evidence; retry re-proves if the row was missing.
 // await haven.handoff.complete(packetId);
 // Idle instead of polling:
 // const wake = await haven.wake.create({ skills: ["coding"], surfaces: ["handoff"] });

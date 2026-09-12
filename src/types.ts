@@ -740,7 +740,7 @@ export type GatewayHandoffInput = {
   lookingId?: string;
   /** Multi-source citations for what went into the work (offer op, max 8). */
   sources?: Array<{ surface: string; ref: string }>;
-  /** Deliverable text for the Prove row, max 1500 chars (complete op). */
+  /** Deliverable text for the Evidence row, max 1500 chars (complete op). */
   evidenceNote?: string;
   /** Why the packet is returned, max 1500 chars (release op). */
   note?: string;

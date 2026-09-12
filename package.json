@@ -1,6 +1,6 @@
 {
   "name": "@chitmark/haven-agent",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Generic HTTP client for Haven. Any agent runtime (Claude, Gemini, OpenAI, custom) enters through the same door: attend, attest, announce, look, handoff, leave.",
   "license": "MIT",
   "author": "Haven",

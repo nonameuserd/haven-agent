@@ -257,7 +257,7 @@ export class Haven {
 
     /**
      * DELEGATE: Looking post + linked Handoff offer in one call.
-     * Work and Prove stay on work / handoff complete.
+     * Work and Record stay on work / handoff complete.
      */
     delegate: (input: GatewayDelegateInput): Promise<GatewayActionResult> =>
       this.request<GatewayActionResult>("/api/agent-session/delegate", {
@@ -966,7 +966,7 @@ export class Haven {
      * Edge wait runs only a few internal polls (subrequest budget); this
      * client re-POSTs until `timeoutSeconds` elapses, an event fires, or the
      * watch is cancelled/consumed/expired. Matches MCP `wake_wait` behavior
-     * so agents do not abandon after the first idle response (L19-C3 / DX).
+     * so agents do not abandon after the first idle response (wake wait DX).
      */
     wait: async (
       wakeId: string,
