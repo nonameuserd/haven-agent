@@ -286,9 +286,7 @@ describe("@chitmark/haven-agent", () => {
       expect(woken.next).toEqual({ method: "POST", path: "/api/handoff/claim" });
     }
 
-    const waitCalls = calls.filter((c) =>
-      c.url.endsWith("/api/wake/wake_7f31/wait"),
-    );
+    const waitCalls = calls.filter((c) => c.url.endsWith("/api/wake/wake_7f31/wait"));
     expect(waitCalls.length).toBeGreaterThanOrEqual(1);
 
     const acked = await haven.wake.ack("wake_7f31");
@@ -351,9 +349,9 @@ describe("@chitmark/haven-agent", () => {
     const woken = await haven.wake.wait("wake_idle", { timeoutSeconds: 10 });
     expect(woken.triggered).toBe(true);
     expect(waitHits).toBe(2);
-    expect(
-      calls.filter((c) => c.url.endsWith("/api/wake/wake_idle/wait")).length,
-    ).toBe(2);
+    expect(calls.filter((c) => c.url.endsWith("/api/wake/wake_idle/wait")).length).toBe(
+      2,
+    );
   });
 
   it("garden yield binds continuation and trail resume cites it", async () => {
@@ -539,6 +537,47 @@ describe("@chitmark/haven-agent", () => {
     expect(lineage.root.id).toBe("hnd_root");
   });
 
+  it("handoff.refine posts handoffId plus handle and returns the report", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const { fetchImpl } = mockFetch((call) => {
+      if (call.url.endsWith("/api/handoff/refine")) {
+        const body = JSON.parse(call.init?.body as string) as Record<string, unknown>;
+        seen.push(body);
+        return jsonResponse(200, {
+          id: "hnd_1",
+          fromHandle: "fox",
+          status: "open",
+          underspecified: true,
+          report: {
+            handoffId: "hnd_1",
+            pass: body.pass ?? 1,
+            maxPasses: 2,
+            underspecified: true,
+            findings: [{ check: "underspecified", status: "warn" }],
+            unresolved: ["missing success criterion (objective)"],
+            suggested: ["Recall the packet and re-offer"],
+          },
+        });
+      }
+      return jsonResponse(404, { error: "NotFound", message: call.url });
+    });
+
+    const haven = new Haven({
+      baseUrl: "https://haven.test",
+      agentId: "agt_x",
+      handle: "fox",
+      fetch: fetchImpl,
+    });
+    await haven.setCredential({ agentId: "agt_x", handle: "fox", signature: "sig" });
+
+    const out = await haven.handoff.refine("hnd_1", undefined, 2);
+    expect(out.underspecified).toBe(true);
+    expect(out.report.pass).toBe(2);
+    expect(out.report.unresolved).toHaveLength(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ handoffId: "hnd_1", fromHandle: "fox", pass: 2 });
+  });
+
   it("handoff.complete sends an optional evidenceNote deliverable", async () => {
     const { fetchImpl, calls } = mockFetch((call) => {
       if (call.url.endsWith("/api/handoff/complete")) {
@@ -572,7 +611,11 @@ describe("@chitmark/haven-agent", () => {
     });
     await haven.setCredential({ agentId: "agt_x", handle: "fox", signature: "sig" });
 
-    const done = (await haven.handoff.complete("hnd_9", "fox", "Shipped it.")) as unknown as {
+    const done = (await haven.handoff.complete(
+      "hnd_9",
+      "fox",
+      "Shipped it.",
+    )) as unknown as {
       noteReceived?: string;
     };
     expect(done.noteReceived).toBe("Shipped it.");
@@ -697,6 +740,9 @@ describe("@chitmark/haven-agent", () => {
       if (call.url.endsWith("/api/agent-session/work")) {
         return jsonResponse(200, { action: "work", op: "start" });
       }
+      if (call.url.endsWith("/api/agent-session/outcome")) {
+        return jsonResponse(200, { action: "outcome", receipt: { id: "ev_1" } });
+      }
       if (call.url.endsWith("/api/agent-session/leave")) {
         return jsonResponse(200, { ok: true, handle: "proxy-bot" });
       }
@@ -753,6 +799,12 @@ describe("@chitmark/haven-agent", () => {
       nextIntent: "Continue coding with a peer",
     });
     await haven.gateway.work({ op: "start", maxSteps: 10 });
+    await haven.gateway.outcome({
+      deliveryRef: "ev_abc123",
+      verdict: "confirmed",
+      tried: "Ran the delivery against fixtures",
+      observed: "All green",
+    });
 
     const actionPaths = [
       "/api/agent-session/find-agent",
@@ -760,6 +812,7 @@ describe("@chitmark/haven-agent", () => {
       "/api/agent-session/request-collaboration",
       "/api/agent-session/handoff",
       "/api/agent-session/work",
+      "/api/agent-session/outcome",
     ];
     for (const path of actionPaths) {
       const call = calls.find((c) => c.url.endsWith(path));
@@ -849,7 +902,10 @@ describe("@chitmark/haven-agent", () => {
             attestationExpiresAt: "2099-01-01T00:00:00.000Z",
             presenceExpiresAt: null,
           },
-          auth: { header: "Authorization: Haven <agentId> <signature>", note: "save once" },
+          auth: {
+            header: "Authorization: Haven <agentId> <signature>",
+            note: "save once",
+          },
           next: { method: "POST", path: "/api/looking", why: "find peer" },
           manual: "/llms.txt",
         });
@@ -880,6 +936,131 @@ describe("@chitmark/haven-agent", () => {
     expect(JSON.parse(String(helloCall?.init?.body ?? "{}"))).toMatchObject({
       arrivalSource: "web_discovery",
       arrivalReferrer: "peer-one",
+    });
+  });
+
+  it("evidence.outcome posts a structured consumer receipt", async () => {
+    const { fetchImpl, calls } = mockFetch((call) => {
+      if (call.url.endsWith("/api/evidence/outcome")) {
+        const body = JSON.parse(call.init?.body as string) as Record<string, unknown>;
+        return jsonResponse(200, {
+          id: "ev_out1",
+          handle: "worker-b",
+          agentId: "agt_w",
+          category: "outcome_confirmed",
+          outcome: "success",
+          scope: "coding, rust work",
+          summary: "Tried: x\nObserved: y",
+          referenceId: body.deliveryRef,
+          verifiedBy: "fox",
+          provenance: "attributable",
+          evidenceHash: "abc",
+          createdAt: "2026-09-14T00:00:00.000Z",
+          expiresAt: "2026-10-14T00:00:00.000Z",
+        });
+      }
+      return jsonResponse(404, { error: "NotFound", message: call.url });
+    });
+
+    const haven = new Haven({
+      baseUrl: "https://haven.test",
+      agentId: "agt_x",
+      handle: "fox",
+      fetch: fetchImpl,
+    });
+    await haven.setCredential({ agentId: "agt_x", handle: "fox", signature: "sig" });
+
+    const receipt = await haven.evidence.outcome({
+      deliveryRef: "ev_del1",
+      verdict: "confirmed",
+      tried: "Ran the delivery against fixtures",
+      observed: "All green",
+      artifactRef: "ev_del1",
+    });
+    expect(receipt.category).toBe("outcome_confirmed");
+    expect(receipt.provenance).toBe("attributable");
+    const call = calls.find((c) => c.url.endsWith("/api/evidence/outcome"));
+    expect(JSON.parse(String(call?.init?.body ?? "{}"))).toMatchObject({
+      agentId: "agt_x",
+      deliveryRef: "ev_del1",
+      verdict: "confirmed",
+      tried: "Ran the delivery against fixtures",
+      observed: "All green",
+      artifactRef: "ev_del1",
+    });
+  });
+
+  it("handoff.create forwards contract fields; accept/reject/verify verdict", async () => {
+    const { fetchImpl, calls } = mockFetch((call) => {
+      if (call.url.endsWith("/api/handoff") && call.init?.method === "POST") {
+        return jsonResponse(200, { id: "hnd_c1", status: "open" });
+      }
+      if (call.url.endsWith("/api/handoff/accept")) {
+        return jsonResponse(200, { id: "hnd_c1", status: "accepted" });
+      }
+      if (call.url.endsWith("/api/handoff/reject")) {
+        return jsonResponse(200, { id: "hnd_c1", status: "claimed", rework: true });
+      }
+      if (call.url.endsWith("/api/handoff/verify")) {
+        return jsonResponse(200, { id: "hnd_c1", status: "verified" });
+      }
+      return jsonResponse(404, { error: "NotFound", message: call.url });
+    });
+
+    const haven = new Haven({
+      baseUrl: "https://haven.test",
+      agentId: "agt_x",
+      handle: "fox",
+      fetch: fetchImpl,
+    });
+    await haven.setCredential({ agentId: "agt_x", handle: "fox", signature: "sig" });
+
+    await haven.handoff.create({
+      summary: "Contract parser work with enough length",
+      nextIntent: "Fix the parser, then deliver",
+      acceptanceCriteria: "Parser builds clean with log lines",
+      maxRounds: 3,
+      acceptor: "judge",
+      budget: { currency: "USD", max: 50 },
+      deadlineMs: 1893456000000,
+      priority: "high",
+      principal: "fox",
+      beneficiary: "judge",
+      liabilityBoundary: "Scope only, never outcomes",
+      dataReads: [{ surface: "board", ref: "post_1" }],
+      aggregateOnly: true,
+    });
+    const offerCall = calls.find(
+      (c) => c.url.endsWith("/api/handoff") && c.init?.method === "POST",
+    );
+    expect(JSON.parse(String(offerCall?.init?.body ?? "{}"))).toMatchObject({
+      acceptanceCriteria: "Parser builds clean with log lines",
+      maxRounds: 3,
+      acceptor: "judge",
+      budget: { currency: "USD", max: 50 },
+      deadlineMs: 1893456000000,
+      priority: "high",
+      principal: "fox",
+      beneficiary: "judge",
+      liabilityBoundary: "Scope only, never outcomes",
+      dataReads: [{ surface: "board", ref: "post_1" }],
+      aggregateOnly: true,
+    });
+
+    const accepted = await haven.handoff.accept("hnd_c1", "judge");
+    expect(accepted.status).toBe("accepted");
+    const rejected = await haven.handoff.reject("hnd_c1", "judge", "Missing log lines");
+    expect(rejected.status).toBe("claimed");
+    const verified = await haven.handoff.verify({
+      handoffId: "hnd_c1",
+      deliveryRef: "ev_del1",
+    });
+    expect(verified.status).toBe("verified");
+    const rejectCall = calls.find((c) => c.url.endsWith("/api/handoff/reject"));
+    expect(JSON.parse(String(rejectCall?.init?.body ?? "{}"))).toMatchObject({
+      handoffId: "hnd_c1",
+      acceptorHandle: "judge",
+      rationale: "Missing log lines",
     });
   });
 });

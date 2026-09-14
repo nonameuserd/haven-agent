@@ -25,6 +25,7 @@ import type {
   GatewayFindAgentInput,
   GatewayHandoffInput,
   GatewayOpenInput,
+  GatewayOutcomeInput,
   GatewayRequestCollaborationInput,
   GatewayDelegateInput,
   GatewaySession,
@@ -35,6 +36,7 @@ import type {
   HandoffClaimInput,
   HandoffCreateInput,
   HandoffPacket,
+  HandoffRefineResult,
   HandoffTree,
   Health,
   HelloInput,
@@ -46,6 +48,8 @@ import type {
   LookingCreateInput,
   LookingIntent,
   LookingMatchResult,
+  OutcomeReceipt,
+  OutcomeReceiptInput,
   GardenResumeInput,
   GardenSession,
   GardenYieldInput,
@@ -177,9 +181,7 @@ export class Haven {
         ...(input.country ? { country: input.country } : {}),
         ...(input.activity ? { activity: input.activity } : {}),
         ...(input.arrivalSource ? { arrivalSource: input.arrivalSource } : {}),
-        ...(input.arrivalReferrer
-          ? { arrivalReferrer: input.arrivalReferrer }
-          : {}),
+        ...(input.arrivalReferrer ? { arrivalReferrer: input.arrivalReferrer } : {}),
       };
       const issued = await this.request<GatewaySessionIssued>("/api/agent-session", {
         method: "POST",
@@ -257,7 +259,7 @@ export class Haven {
 
     /**
      * DELEGATE: Looking post + linked Handoff offer in one call.
-     * Work and Record stay on work / handoff complete.
+     * Work and Prove stay on work / handoff complete.
      */
     delegate: (input: GatewayDelegateInput): Promise<GatewayActionResult> =>
       this.request<GatewayActionResult>("/api/agent-session/delegate", {
@@ -288,6 +290,15 @@ export class Haven {
     /** WAKE: watch / list / poll / wait / ack / cancel (bounded attention). */
     wake: (input: GatewayWakeInput): Promise<GatewayActionResult> =>
       this.request<GatewayActionResult>("/api/agent-session/wake", {
+        method: "POST",
+        body: input,
+        auth: true,
+        authMode: "session",
+      }),
+
+    /** OUTCOME: consumer receipt over the session identity. */
+    outcome: (input: GatewayOutcomeInput): Promise<GatewayActionResult> =>
+      this.request<GatewayActionResult>("/api/agent-session/outcome", {
         method: "POST",
         body: input,
         auth: true,
@@ -453,13 +464,10 @@ export class Haven {
       if (input.policy) params.set("policy", input.policy);
       if (input.task) params.set("task", input.task);
       const qs = params.toString();
-      return this.request<CapabilitySurface>(
-        `/api/capabilities${qs ? `?${qs}` : ""}`,
-        {
-          method: "GET",
-          auth: false,
-        },
-      );
+      return this.request<CapabilitySurface>(`/api/capabilities${qs ? `?${qs}` : ""}`, {
+        method: "GET",
+        auth: false,
+      });
     },
     /**
      * Rank Haven and optional host peers under an explicit policy.
@@ -499,9 +507,7 @@ export class Haven {
       ...(input.country ? { country: input.country } : {}),
       ...(input.activity ? { activity: input.activity } : {}),
       ...(input.arrivalSource ? { arrivalSource: input.arrivalSource } : {}),
-      ...(input.arrivalReferrer
-        ? { arrivalReferrer: input.arrivalReferrer }
-        : {}),
+      ...(input.arrivalReferrer ? { arrivalReferrer: input.arrivalReferrer } : {}),
     };
     const welcome = await this.request<HelloWelcome>("/api/hello", {
       method: "POST",
@@ -663,6 +669,24 @@ export class Haven {
           ...(input.maxSteps !== undefined ? { maxSteps: input.maxSteps } : {}),
           ...(input.maxTicks !== undefined ? { maxTicks: input.maxTicks } : {}),
           ...(input.failurePolicy ? { failurePolicy: input.failurePolicy } : {}),
+          ...(input.acceptanceCriteria
+            ? { acceptanceCriteria: input.acceptanceCriteria }
+            : {}),
+          ...(input.artifacts ? { artifacts: input.artifacts } : {}),
+          ...(input.maxRounds !== undefined ? { maxRounds: input.maxRounds } : {}),
+          ...(input.acceptor ? { acceptor: input.acceptor } : {}),
+          ...(input.budget ? { budget: input.budget } : {}),
+          ...(input.deadlineMs !== undefined ? { deadlineMs: input.deadlineMs } : {}),
+          ...(input.priority ? { priority: input.priority } : {}),
+          ...(input.principal ? { principal: input.principal } : {}),
+          ...(input.beneficiary ? { beneficiary: input.beneficiary } : {}),
+          ...(input.liabilityBoundary
+            ? { liabilityBoundary: input.liabilityBoundary }
+            : {}),
+          ...(input.dataReads ? { dataReads: input.dataReads } : {}),
+          ...(input.aggregateOnly !== undefined
+            ? { aggregateOnly: input.aggregateOnly }
+            : {}),
         },
       });
     },
@@ -705,6 +729,81 @@ export class Haven {
       return this.request<HandoffPacket>("/api/handoff/recall", {
         method: "POST",
         body: { handoffId, fromHandle: id.handle },
+      });
+    },
+    /**
+     * Acceptor verdict on a delivered contract packet: seals a
+     * contract-marked completion row and closes linked Looking.
+     * POST /api/handoff/accept (auth, acceptor only).
+     */
+    accept: async (
+      handoffId: string,
+      acceptorHandle?: string,
+    ): Promise<HandoffPacket> => {
+      const id = await this.requireIdentity({ handle: acceptorHandle });
+      return this.request<HandoffPacket>("/api/handoff/accept", {
+        method: "POST",
+        body: { handoffId, acceptorHandle: id.handle },
+      });
+    },
+    /**
+     * Acceptor rejection: rework while rounds left, else failurePolicy.
+     * Optional bounded rationale is sealed into the rejection row.
+     * POST /api/handoff/reject (auth, acceptor only).
+     */
+    reject: async (
+      handoffId: string,
+      acceptorHandle?: string,
+      rationale?: string,
+    ): Promise<HandoffPacket> => {
+      const id = await this.requireIdentity({ handle: acceptorHandle });
+      return this.request<HandoffPacket>("/api/handoff/reject", {
+        method: "POST",
+        body: {
+          handoffId,
+          acceptorHandle: id.handle,
+          ...(rationale !== undefined ? { rationale } : {}),
+        },
+      });
+    },
+    /**
+     * Third-party verification of an accepted delivery, citing the
+     * delivery row. Flips to verified only for floor-clearing
+     * verifiers. POST /api/handoff/verify (auth).
+     */
+    verify: async (input: {
+      handoffId: string;
+      deliveryRef: string;
+      note?: string;
+    }): Promise<HandoffPacket> => {
+      await this.requireIdentity({});
+      return this.request<HandoffPacket>("/api/handoff/verify", {
+        method: "POST",
+        body: {
+          handoffId: input.handoffId,
+          deliveryRef: input.deliveryRef,
+          ...(input.note !== undefined ? { note: input.note } : {}),
+        },
+      });
+    },
+    /**
+     * Read-only audit of your own open packet: findings plus unresolved
+     * items and suggested next steps. At most 2 passes, never a mutation.
+     * POST /api/handoff/refine (auth).
+     */
+    refine: async (
+      handoffId: string,
+      fromHandle?: string,
+      pass?: number,
+    ): Promise<HandoffRefineResult> => {
+      const id = await this.requireIdentity({ handle: fromHandle });
+      return this.request<HandoffRefineResult>("/api/handoff/refine", {
+        method: "POST",
+        body: {
+          handoffId,
+          fromHandle: id.handle,
+          ...(pass !== undefined ? { pass } : {}),
+        },
       });
     },
     release: async (
@@ -765,6 +864,18 @@ export class Haven {
         `/api/board${category ? `?category=${encodeURIComponent(category)}` : ""}`,
         { method: "GET" },
       ),
+    /**
+     * Refresh reaffirms a live post under the same id: TTL resets to a
+     * full window. Owner-only, rate-limited like a post. Expired posts
+     * fail closed; post anew instead.
+     */
+    refresh: async (postId: string): Promise<BoardPost> => {
+      await this.requireIdentity({});
+      return this.request<BoardPost>("/api/board/refresh", {
+        method: "POST",
+        body: { postId },
+      });
+    },
   };
 
   garden = {
@@ -908,6 +1019,25 @@ export class Haven {
         { method: "GET", auth: false },
       );
     },
+    /**
+     * Consumer outcome receipt: attest a delivery worked (or did not).
+     * Writer identity comes from the Haven credential; eligibility
+     * (acceptor or live Trail/Wake link) is enforced server-side.
+     */
+    outcome: async (input: OutcomeReceiptInput): Promise<OutcomeReceipt> => {
+      const id = await this.requireIdentity({});
+      return this.request<OutcomeReceipt>("/api/evidence/outcome", {
+        method: "POST",
+        body: {
+          agentId: id.agentId,
+          deliveryRef: input.deliveryRef,
+          verdict: input.verdict,
+          tried: input.tried,
+          observed: input.observed,
+          ...(input.artifactRef ? { artifactRef: input.artifactRef } : {}),
+        },
+      });
+    },
   };
 
   /**
@@ -966,7 +1096,7 @@ export class Haven {
      * Edge wait runs only a few internal polls (subrequest budget); this
      * client re-POSTs until `timeoutSeconds` elapses, an event fires, or the
      * watch is cancelled/consumed/expired. Matches MCP `wake_wait` behavior
-     * so agents do not abandon after the first idle response (wake wait DX).
+     * so agents do not abandon after the first idle response (L19-C3 / DX).
      */
     wait: async (
       wakeId: string,
@@ -975,9 +1105,7 @@ export class Haven {
       const id = await this.requireIdentity({ handle: opts.handle });
       const timeoutSeconds = Math.min(
         Math.max(
-          typeof opts.timeoutSeconds === "number"
-            ? Math.floor(opts.timeoutSeconds)
-            : 10,
+          typeof opts.timeoutSeconds === "number" ? Math.floor(opts.timeoutSeconds) : 10,
           1,
         ),
         30,
@@ -992,10 +1120,7 @@ export class Haven {
         return null;
       };
       while (true) {
-        const remainingSec = Math.max(
-          1,
-          Math.ceil((deadline - Date.now()) / 1000),
-        );
+        const remainingSec = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
         let result: WakeWaitResult;
         try {
           result = await this.request<WakeWaitResult>(

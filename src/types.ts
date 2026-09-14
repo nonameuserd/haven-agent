@@ -16,11 +16,7 @@ export type HavenOptions = {
   clientName?: string;
 };
 
-export type AttestKind =
-  | "self_attested"
-  | "haven_key"
-  | "operator_sig"
-  | "provider_sig";
+export type AttestKind = "self_attested" | "haven_key" | "operator_sig" | "provider_sig";
 
 export type AttestRequest = {
   agentId: string;
@@ -137,6 +133,15 @@ export type LookingCandidateStanding = {
     | null;
   /** Earliest expiry of the counted rows: the counts decay. Null when no evidence counted. */
   evidenceExpiresAt: string | null;
+  /**
+   * Best earned capability evidence card for matched skills (L44).
+   * Null when no eligible Prove row maps to a routing card.
+   */
+  evidenceCard?: CapabilityEvidenceCard | null;
+  /** Discovery layer 3: shared intent/scope tokens under the named policy. Disclosed, never ranked. */
+  similarity?: number;
+  /** Discovery layer 5: confirmed outcomes in non-requested skills. Shown only. */
+  outcomeAdjacent?: { skills: string[]; confirmed: number };
 };
 
 export type LookingMatchResult = {
@@ -154,6 +159,8 @@ export type LookingMatchResult = {
    * verified (at least one candidate with skill evidence).
    */
   capabilityStatus?: "none" | "unverified" | "verified";
+  /** Discovery layers, strongest last, each disclosed (policy + threshold). */
+  dimensions?: Array<{ layer: number; name: string; policy: string; detail: string }>;
 };
 
 export type LookingGapNext = {
@@ -165,6 +172,20 @@ export type LookingGapNext = {
     op: "offer";
     preset: "hard_gap";
     why: string;
+  };
+  /**
+   * Deficit-triggered integration (Clinic / Wake / Evidence verify / human).
+   * Present on current Haven; older deployments may omit.
+   */
+  integration?: {
+    kind: "looking_empty" | "looking_no_evidence" | "empty_feasible";
+    why: string;
+    next: Array<{
+      surface: string;
+      method: "GET" | "POST";
+      path: string;
+      why: string;
+    }>;
   };
 };
 
@@ -192,6 +213,30 @@ export type HandoffCreateInput = {
   maxTicks?: number;
   /** What happens on failure, machine-readable (offer op). */
   failurePolicy?: "return_to_offerer" | "release_to_pool" | "escalate_to_operator";
+  /** Acceptance criteria (offer op): stating it carries a contract. */
+  acceptanceCriteria?: string;
+  /** Required deliverable references (offer op, max 8). */
+  artifacts?: Array<{ surface: "evidence" | "library" | "board"; ref: string }>;
+  /** Worker-to-acceptance rounds (offer op, 1-20, default 1). */
+  maxRounds?: number;
+  /** The only handle moving the packet out of DELIVERED (offer op, default offerer). */
+  acceptor?: string;
+  /** Economic envelope for layers above (offer op, recorded verbatim). */
+  budget?: { currency: string; max: number };
+  /** Wall-clock deadline in epoch ms, enforced as expiry (offer op). */
+  deadlineMs?: number;
+  /** Priority for layers above, metadata only (offer op). */
+  priority?: "low" | "normal" | "high";
+  /** Whose need originated the work (offer op, resolved handle, inherited below root). */
+  principal?: string;
+  /** Who consumes the result (offer op, default acceptor, immutable below root). */
+  beneficiary?: string;
+  /** Bounded liability text, recorded never interpreted (offer op). */
+  liabilityBoundary?: string;
+  /** Named reads the worker may know (offer op, max 8, resolved like artifacts). */
+  dataReads?: Array<{ surface: "evidence" | "library" | "board"; ref: string }>;
+  /** Queries stay aggregate-only (offer op, declarative). */
+  aggregateOnly?: boolean;
   fromHandle?: string;
   fromAgentId?: string;
 };
@@ -231,6 +276,22 @@ export type HandoffPacket = {
   maxTicks?: number;
   /** Delegation contract: machine-readable failure policy, if set. */
   failurePolicy?: string;
+  /** Task contract: acceptance criteria, if the offer stated any. */
+  acceptanceCriteria?: string;
+  /** Task contract: required deliverable references, if any. */
+  artifacts?: Array<{ surface: string; ref: string }>;
+  /** Task contract: worker-to-acceptance rounds, if set. */
+  maxRounds?: number;
+  /** Task contract: rounds left (server-managed). */
+  roundsRemaining?: number;
+  /** Task contract: the handle judging delivery (default the offerer). */
+  acceptor?: string;
+  /** Task contract: economic envelope for layers above, if set. */
+  budget?: { currency: string; max: number };
+  /** Task contract: wall-clock deadline, enforced as expiry, if set. */
+  deadline?: string;
+  /** Task contract: priority for layers above, if set. */
+  priority?: string;
   createdAt: string;
   expiresAt: string;
   continuation?: Continuation;
@@ -254,6 +315,30 @@ export type HandoffTree = {
   depth: number;
   /** False when truncated by the cap or a parent fell outside the set. */
   complete: boolean;
+};
+
+export type RefineCheckStatus = "pass" | "fail" | "warn";
+
+export type RefineFinding = {
+  check: string;
+  status: RefineCheckStatus;
+  detail?: string;
+};
+
+/** Read-only audit of one open packet. Never a mutation, never invented values. */
+export type HandoffRefineReport = {
+  handoffId: string;
+  pass: number;
+  maxPasses: number;
+  underspecified: boolean;
+  findings: RefineFinding[];
+  unresolved: string[];
+  suggested: string[];
+};
+
+export type HandoffRefineResult = HandoffPacket & {
+  underspecified: boolean;
+  report: HandoffRefineReport;
 };
 
 export type HandoffClaimInput = {
@@ -287,6 +372,10 @@ export type BoardPost = BoardCreateInput & {
   id: string;
   expiresAt: string;
   createdAt: string;
+  /** Last refresh reaffirmation; absent when never refreshed. */
+  updatedAt?: string;
+  /** True when the author has live presence or an open intent (list reads). */
+  authorLive?: boolean;
   flagged: boolean;
   replyCount: number;
 };
@@ -324,23 +413,12 @@ export type HelloInput = {
 };
 
 export type IdentityLevel =
-  | "self_attested"
-  | "operator_attested"
-  | "provider_attested"
-  | "historically_evidenced";
+  "self_attested" | "operator_attested" | "provider_attested" | "historically_evidenced";
 
 /** Machine-readable capability catalog (GET /api/capabilities). */
-export type CapabilityKind =
-  | "agent_delegation"
-  | "vendor"
-  | "infra"
-  | "local"
-  | "other";
+export type CapabilityKind = "agent_delegation" | "vendor" | "infra" | "local" | "other";
 
-export type CapabilityRoutingPolicy =
-  | "best"
-  | "as_provided"
-  | "constrained_best";
+export type CapabilityRoutingPolicy = "best" | "as_provided" | "constrained_best";
 
 export type CapabilityScoreHints = {
   fit?: number;
@@ -429,6 +507,20 @@ export type CapabilityRankingAudit = {
   weights: Record<string, number>;
   entries: CapabilityRankEntry[];
   filtered?: CapabilityFilteredEntry[];
+  /**
+   * Empty feasible set under constrained_best: Clinic / Evidence verify /
+   * hard_gap / human next steps. Never a least-bad forced pick.
+   */
+  integration?: {
+    kind: "empty_feasible" | "looking_empty" | "looking_no_evidence";
+    why: string;
+    next: Array<{
+      surface: string;
+      method: "GET" | "POST";
+      path: string;
+      why: string;
+    }>;
+  } | null;
   constraints?: RoutingConstraint[];
   objective?: RoutingObjectiveStep[];
   trustedVerifiers?: string[];
@@ -520,6 +612,16 @@ export type RankCapabilitiesInput = {
   trustedVerifiers?: string[];
   /** ISO asOf for freshness age/expiry. */
   asOf?: string;
+  /**
+   * First-class provenance floor for policy=constrained_best
+   * (self_attested | observed_attributable | independently_verified).
+   */
+  minProvenance?: string;
+  /**
+   * First-class assurance floor for policy=constrained_best
+   * (asserted | sealed | executed | verified).
+   */
+  minAssurance?: string;
 };
 
 export type HelloWelcome = {
@@ -559,14 +661,46 @@ export type Health = {
 
 export type EvidenceCategory =
   | "handoff_completed"
+  | "handoff_delivered"
   | "audit_passed"
   | "sandbox_run"
   | "garden_yield"
   | "trail_verified"
   | "capability_redeemed"
-  | "clinic_check";
+  | "clinic_check"
+  | "outcome_confirmed"
+  | "outcome_rejected";
 
 export type EvidenceOutcome = "success" | "failure" | "partial";
+
+export type OutcomeVerdict = "confirmed" | "rejected";
+
+export type OutcomeReceiptInput = {
+  deliveryRef: string;
+  verdict: OutcomeVerdict;
+  /** What the consumer tried against the delivery (4-250 chars). */
+  tried: string;
+  /** What the consumer observed (4-250 chars). */
+  observed: string;
+  /** Optional artifact citation: a live evidence row id. Must resolve. */
+  artifactRef?: string;
+};
+
+export type OutcomeReceipt = {
+  id: string;
+  handle: string;
+  agentId: string;
+  category: "outcome_confirmed" | "outcome_rejected";
+  outcome: EvidenceOutcome;
+  scope: string;
+  summary: string;
+  referenceId?: string;
+  verifiedBy?: string;
+  provenance: "recorded" | "attributable";
+  evidenceHash: string;
+  createdAt: string;
+  expiresAt: string;
+};
 
 export type DemonstratedSkillRef = {
   id: string;
@@ -584,6 +718,7 @@ export type DemonstratedSkill = {
   failures: number;
   attributable: number;
   recorded: number;
+  confirmed: number;
   lastCompletedAt: string | null;
   evidence: DemonstratedSkillRef[];
 };
@@ -613,6 +748,11 @@ export type EvidenceSummary = {
   recent: unknown[];
   capabilities: string[];
   demonstrated: DemonstratedSkill[];
+  /**
+   * Best earned CapabilityEvidenceCard per demonstrated skill (L44).
+   * Closed loop: Prove rows → frozen cards for later constrained_best.
+   */
+  capabilityEvidence?: Array<{ skill: string; evidence: CapabilityEvidenceCard }>;
   firstRecordedAt: string | null;
   reliability: HandoffReliability;
   completionLatency: { medianMs: number; measuredN: number } | null;
@@ -719,6 +859,10 @@ export type GatewayHandoffOp =
   | "claim"
   | "complete"
   | "release"
+  | "accept"
+  | "reject"
+  | "verify"
+  | "refine"
   | "list"
   | "claim_next"
   | "chain"
@@ -740,7 +884,7 @@ export type GatewayHandoffInput = {
   lookingId?: string;
   /** Multi-source citations for what went into the work (offer op, max 8). */
   sources?: Array<{ surface: string; ref: string }>;
-  /** Deliverable text for the Evidence row, max 1500 chars (complete op). */
+  /** Deliverable text for the Prove row, max 1500 chars (complete op). */
   evidenceNote?: string;
   /** Why the packet is returned, max 1500 chars (release op). */
   note?: string;
@@ -753,6 +897,36 @@ export type GatewayHandoffInput = {
   failurePolicy?: "return_to_offerer" | "release_to_pool" | "escalate_to_operator";
   /** Fill offer contract defaults for incomplete-data / unknown-capability gaps. */
   preset?: "hard_gap";
+  /** Audit pass number for refine (default 1, max 2). */
+  pass?: number;
+  /** Acceptance criteria (offer op): stating it carries a contract. */
+  acceptanceCriteria?: string;
+  /** Required deliverable references (offer op, max 8). */
+  artifacts?: Array<{ surface: string; ref: string }>;
+  /** Worker-to-acceptance rounds (offer op, 1-20, default 1). */
+  maxRounds?: number;
+  /** The only handle moving the packet out of DELIVERED (offer op). */
+  acceptor?: string;
+  /** Economic envelope for layers above (offer op). */
+  budget?: { currency: string; max: number };
+  /** Wall-clock deadline in epoch ms, enforced as expiry (offer op). */
+  deadlineMs?: number;
+  /** Priority for layers above, metadata only (offer op). */
+  priority?: "low" | "normal" | "high";
+  /** Whose need originated the work (offer op, resolved handle). */
+  principal?: string;
+  /** Who consumes the result (offer op, default acceptor). */
+  beneficiary?: string;
+  /** Bounded liability text, recorded never interpreted (offer op). */
+  liabilityBoundary?: string;
+  /** Named reads the worker may know (offer op, max 8). */
+  dataReads?: Array<{ surface: string; ref: string }>;
+  /** Queries stay aggregate-only (offer op, declarative). */
+  aggregateOnly?: boolean;
+  /** Why the delivery missed the criteria (reject op, optional, max 500). */
+  rationale?: string;
+  /** Delivery row the verification checks (verify op). */
+  deliveryRef?: string;
 };
 
 export type GatewayWorkOp = "start" | "tick" | "yield" | "resume";
@@ -764,6 +938,10 @@ export type GatewayWorkInput = {
   maxSteps?: number;
   ticks?: number;
   summary?: string;
+  /** What just failed (yield op, optional, max 500, cleared on resume). */
+  whatFailed?: string;
+  /** What to try next (yield op, optional, max 500, cleared on resume). */
+  whatToTryNext?: string;
   resumeWakeId?: string;
   autoTrail?: boolean;
   autoHandoff?: boolean;
@@ -773,6 +951,15 @@ export type GatewayWorkInput = {
   trailHash?: string;
   wakeId?: string;
   wakeEventId?: string;
+};
+
+/** Gateway outcome body (consumer receipt over the session identity). */
+export type GatewayOutcomeInput = {
+  deliveryRef: string;
+  verdict: OutcomeVerdict;
+  tried: string;
+  observed: string;
+  artifactRef?: string;
 };
 
 /** Opaque JSON from gateway action routes (never includes attestation signature). */
@@ -920,6 +1107,10 @@ export type GardenSession = {
   yieldAt?: string;
   checkpointReason?: string;
   summary?: string;
+  /** What just failed, in the agent's own words. Cleared on resume. */
+  whatFailed?: string;
+  /** What to try next after resume. Cleared on resume. */
+  whatToTryNext?: string;
   expiresAt: string;
   continuation?: Continuation;
 };
@@ -927,6 +1118,10 @@ export type GardenSession = {
 export type GardenYieldInput = {
   sessionId: string;
   summary: string;
+  /** What just failed (optional, max 500, cleared on resume). */
+  whatFailed?: string;
+  /** What to try next (optional, max 500, cleared on resume). */
+  whatToTryNext?: string;
   /** Bind this yield to an armed watch the yielder owns. */
   resumeWakeId?: string;
   /** Leave a hash-only trail bookmark for this yield. */
