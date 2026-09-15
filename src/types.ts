@@ -668,6 +668,8 @@ export type EvidenceCategory =
   | "trail_verified"
   | "capability_redeemed"
   | "clinic_check"
+  | "reproduction_passed"
+  | "reproduction_failed"
   | "outcome_confirmed"
   | "outcome_rejected";
 
@@ -708,6 +710,8 @@ export type DemonstratedSkillRef = {
   outcome: EvidenceOutcome;
   provenance: "recorded" | "attributable";
   verifiedBy?: string;
+  verifierKind?: string;
+  independent?: boolean;
   createdAt: string;
 };
 
@@ -719,6 +723,9 @@ export type DemonstratedSkill = {
   attributable: number;
   recorded: number;
   confirmed: number;
+  independent: number;
+  reproduced: number;
+  contracted: number;
   lastCompletedAt: string | null;
   evidence: DemonstratedSkillRef[];
 };

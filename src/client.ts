@@ -787,6 +787,29 @@ export class Haven {
       });
     },
     /**
+     * Independent re-execution of an accepted delivery, citing the
+     * delivery row. The reproducer must be a third party (not worker,
+     * acceptor, or prior verifier); the floor decides promotion.
+     * Reproduction never flips packet state. POST /api/handoff/reproduce (auth).
+     */
+    reproduce: async (input: {
+      handoffId: string;
+      deliveryRef: string;
+      matched: boolean;
+      note?: string;
+    }): Promise<HandoffPacket> => {
+      await this.requireIdentity({});
+      return this.request<HandoffPacket>("/api/handoff/reproduce", {
+        method: "POST",
+        body: {
+          handoffId: input.handoffId,
+          deliveryRef: input.deliveryRef,
+          matched: input.matched,
+          ...(input.note !== undefined ? { note: input.note } : {}),
+        },
+      });
+    },
+    /**
      * Read-only audit of your own open packet: findings plus unresolved
      * items and suggested next steps. At most 2 passes, never a mutation.
      * POST /api/handoff/refine (auth).
