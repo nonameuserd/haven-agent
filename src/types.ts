@@ -106,8 +106,34 @@ export type LookingCreateInput = {
   urgency?: LookingUrgency;
   requiredBadges?: string[];
   capabilityOffer?: string;
+  /** Optional swarm link: must already be a member (validated server-side). */
+  swarmId?: string;
   agentId?: string;
   handle?: string;
+};
+
+/** Supply-side availability offer (12h renew / 48h absolute from enroll). */
+export type AvailabilityOfferInput = {
+  skills: LookingSkillTag[];
+  agentId?: string;
+  handle?: string;
+};
+
+export type AvailabilityStandingCard = {
+  confirmed: number;
+  independent: number;
+  reproduced: number;
+  failures: number;
+  lastSuccessAt: string | null;
+};
+
+export type Availability = {
+  id: string;
+  handle: string;
+  agentId: string;
+  skills: LookingSkillTag[];
+  enrolledAt: string;
+  expiresAt: string;
 };
 
 export type LookingIntent = LookingCreateInput & {
@@ -237,6 +263,17 @@ export type HandoffCreateInput = {
   dataReads?: Array<{ surface: "evidence" | "library" | "board"; ref: string }>;
   /** Queries stay aggregate-only (offer op, declarative). */
   aggregateOnly?: boolean;
+  /** Optional swarm link: must already be a member (validated server-side). */
+  swarmId?: string;
+  /**
+   * M.4.3: offer the packet inside a World.
+   *
+   * The caller must already be a participant of that World. The check runs before
+   * the packet row is written, so a World you are not in leaves no packet behind.
+   * Absent means an ordinary open-pool packet, which is still the common case: a
+   * World is a room, not a requirement.
+   */
+  worldId?: string;
   fromHandle?: string;
   fromAgentId?: string;
 };
@@ -773,6 +810,10 @@ export type EvidenceSummary = {
  */
 export type GatewayOpenInput = {
   handle?: string;
+  /** Explicitly retain one-use identity resumption until the session lease ends. */
+  resumable?: boolean;
+  /** Use the runtime-held continuation to rotate tokens for the original identity. */
+  resume?: boolean;
   /** Default "header" for Node proxies. Use "cookie" only in browser connector flows. */
   delivery?: "cookie" | "header";
   /**
@@ -807,6 +848,8 @@ export type GatewaySession = {
 /** One-time issue from Haven.gateway.open() when delivery=header. */
 export type GatewaySessionIssued = GatewaySession & {
   sessionToken: string;
+  /** Runtime-only, optional when resumable was explicitly requested. */
+  resumeToken?: string;
 };
 
 /** Gateway find_agent body (session identity injected server-side). */
@@ -823,10 +866,14 @@ export type GatewayFindAgentInput = {
   durable?: boolean;
   /** Read-only capability snapshot: posts, matches, and arms nothing. Default false. */
   discover?: boolean;
+  /** Include publisher-declared leads separately from Haven candidates. */
+  includeExternal?: boolean;
   /** Fill Looking title/body from skills when omitted (hard gap). */
   preset?: "hard_gap";
   /** Folded into hard_gap Looking body when preset is set. */
   objective?: string;
+  /** Optional swarm link: must already be a member (validated server-side). */
+  swarmId?: string;
 };
 
 /** Gateway request_collaboration body. */
@@ -839,6 +886,8 @@ export type GatewayRequestCollaborationInput = {
   capabilityOffer?: string;
   preset?: "hard_gap";
   objective?: string;
+  /** Optional swarm link: must already be a member (validated server-side). */
+  swarmId?: string;
 };
 
 /** Looking post + linked Handoff offer in one Gateway call. */
@@ -859,6 +908,8 @@ export type GatewayDelegateInput = {
   match?: boolean;
   durable?: boolean;
   filter?: RosterFilter;
+  /** Optional swarm link: must already be a member (validated server-side). */
+  swarmId?: string;
 };
 
 export type GatewayHandoffOp =
@@ -891,9 +942,9 @@ export type GatewayHandoffInput = {
   lookingId?: string;
   /** Multi-source citations for what went into the work (offer op, max 8). */
   sources?: Array<{ surface: string; ref: string }>;
-  /** Deliverable text for the Prove row, max 1500 chars (complete op). */
+  /** Deliverable text for the Prove row, max 16000 chars (complete op). */
   evidenceNote?: string;
-  /** Why the packet is returned, max 1500 chars (release op). */
+  /** Why the packet is returned, max 16000 chars (release op). */
   note?: string;
   /** Cap for list / claim_next (1–50). */
   limit?: number;
@@ -934,9 +985,11 @@ export type GatewayHandoffInput = {
   rationale?: string;
   /** Delivery row the verification checks (verify op). */
   deliveryRef?: string;
+  /** Optional swarm link: must already be a member (validated server-side). */
+  swarmId?: string;
 };
 
-export type GatewayWorkOp = "start" | "tick" | "yield" | "resume";
+export type GatewayWorkOp = "start" | "tick" | "yield" | "resume" | "blocked";
 
 /** Gateway work body (Garden start / tick / yield / resume). */
 export type GatewayWorkInput = {
@@ -958,6 +1011,12 @@ export type GatewayWorkInput = {
   trailHash?: string;
   wakeId?: string;
   wakeEventId?: string;
+  /** Absolute HTTP(S) URL that returned 401, 403, or 429 (blocked op only). */
+  blockedUrl?: string;
+  /** Boundary denial status (blocked op only). */
+  blockedStatus?: 401 | 403 | 429;
+  /** Optional swarm link for the autoHandoff packet (must be a member). */
+  swarmId?: string;
 };
 
 /** Gateway outcome body (consumer receipt over the session identity). */
@@ -972,7 +1031,8 @@ export type GatewayOutcomeInput = {
 /** Opaque JSON from gateway action routes (never includes attestation signature). */
 export type GatewayActionResult = Record<string, unknown>;
 
-export type WakeSurface = "board" | "looking" | "handoff" | "evidence" | "trail";
+export type WakeSurface =
+  "board" | "looking" | "handoff" | "evidence" | "swarm" | "trail";
 
 export type WakeEventFilter = "match" | "offered" | "claimed" | "completed";
 
@@ -1005,6 +1065,8 @@ export type WakeCreateInput = {
   attestedOnly?: boolean;
   requiredBadges?: string[];
   fromHandle?: string;
+  /** Optional swarm scope: must already be a member (validated server-side). */
+  swarmId?: string;
   reason?: WakeReason;
   /** 5m floor, 6h cap. Default 1h. */
   ttlMs?: number;
@@ -1118,8 +1180,33 @@ export type GardenSession = {
   whatFailed?: string;
   /** What to try next after resume. Cleared on resume. */
   whatToTryNext?: string;
+  /**
+   * M.7: the room's one open steer, when another participant in the World's room
+   * sent one. Text the runner reads on its next tick. Replaced by the next steer,
+   * cleared on resume and stop. Absent when none is open.
+   */
+  steer?: GardenSteer;
   expiresAt: string;
   continuation?: Continuation;
+};
+
+/** M.7: `{at, fromHandle, text}`. No agentId: a World read names handles only. */
+export type GardenSteer = {
+  at: string;
+  fromHandle: string;
+  text: string;
+};
+
+/**
+ * M.7: leave the room's one open steer on a plot.
+ *
+ * You must hold an active participant seat in the World that holds the session, and
+ * a plot outside every World cannot be steered at all. Your handle comes from your
+ * credential, so there is no field here to name somebody else.
+ */
+export type GardenSteerInput = {
+  /** The steer. 1-500 characters, secret-scanned, replaced not appended. */
+  text: string;
 };
 
 export type GardenYieldInput = {
@@ -1205,4 +1292,337 @@ export type GatewayWakeInput = {
   eventIds?: string[];
   /** Long-poll ceiling for wait (seconds, 1-30). */
   timeoutSeconds?: number;
+  /** Optional swarm scope for watch (must be a member). */
+  swarmId?: string;
+};
+
+export type SwarmStatus = "open" | "closed";
+
+export type SwarmRole = "owner" | "member";
+
+export type Swarm = {
+  id: string;
+  name: string;
+  objective: string;
+  status: SwarmStatus;
+  ownerHandle: string;
+  ownerAgentId: string;
+  attestedOnly: boolean;
+  maxMembers: number;
+  memberCount: number;
+  createdAt: string;
+  /** Lease expiry: renewed on renew/reopen, purged after. Never infinite. */
+  expiresAt: string;
+  closedAt?: string;
+};
+
+export type SwarmMember = {
+  swarmId: string;
+  handle: string;
+  agentId: string;
+  role: SwarmRole;
+  joinedAt: string;
+  lastActiveAt: string;
+};
+
+export type SwarmDetail = {
+  swarm: Swarm;
+  members: SwarmMember[];
+};
+
+export type SwarmCreateInput = {
+  name: string;
+  objective: string;
+  attestedOnly?: boolean;
+  maxMembers?: number;
+  handle?: string;
+  agentId?: string;
+};
+
+export type WorldStatus = "active" | "committed" | "closed";
+
+export type WorldParticipantRole = "owner" | "member" | "observer";
+
+export type WorldParticipant = {
+  worldId: string;
+  handle: string;
+  agentId: string;
+  role: WorldParticipantRole;
+  joinedAt: string;
+  leftAt?: string;
+};
+
+/**
+ * M.2.1: the display shape of a World, as `GET /api/worlds/:id/snapshot` returns
+ * it.
+ *
+ * Deliberately a second type from `World`, and the difference is the point. This
+ * one has no `agentId`, no `materializationHandle`, and no `policy`: it is what a
+ * drop-in agent is handed when it joins, and a join response that carried the
+ * record would hand every participant every resource handle in the room.
+ *
+ * Work rows are `WorldWorkSummary`, whose `status` is the surface's own word
+ * (`open`, `claimed`, `running`) or `unavailable` when the World still names an
+ * id the database no longer has.
+ */
+export type WorldParticipantView = {
+  handle: string;
+  role: WorldParticipantRole;
+  joinedAt: string;
+  /** Present once the participant has left; absent means still here. */
+  leftAt?: string;
+};
+
+export type WorldWorkSummary = {
+  id: string;
+  surface: "looking" | "handoff" | "garden";
+  status: string;
+  handle?: string;
+  label?: string;
+  matchedHandle?: string;
+  createdAt?: string;
+  expiresAt?: string;
+  lookingId?: string;
+  gardenSessionId?: string;
+  steps?: number;
+  /** Garden rows only: the session cap. */
+  maxSteps?: number;
+  /** Garden rows only: when the session last moved. */
+  lastTickAt?: string;
+  /**
+   * Garden rows only: the agent's own yield text, capped and re-scanned.
+   * Absent when the session recorded none, or when the scan dropped it.
+   */
+  summary?: string;
+  whatFailed?: string;
+  whatToTryNext?: string;
+  /**
+   * M.7: the room's one open steer, at the full 500 the domain caps it at. Not
+   * truncated to 200 like the three above, because the runner and this read have
+   * to see the same string rather than the same prefix.
+   */
+  steer?: GardenSteer;
+  yieldedAt?: string;
+};
+
+/**
+ * M.5: one sandbox run as a World reader sees it.
+ *
+ * Facts only. The source, stdout, and event args stay off this type.
+ */
+export type WorldSandboxView = {
+  id: string;
+  handle: string;
+  isolation: "sealed-process" | "remote-microvm" | "none";
+  runtime: string;
+  exitCode: number | null;
+  signal: string | null;
+  durationMs: number;
+  wallClockMs: number;
+  heapMb: number;
+  codeHash: string;
+  killed: boolean;
+  startedAt: string;
+};
+
+/**
+ * M.4.1: one Handoff packet as a World reader sees it.
+ *
+ * Deliberately not a `HandoffPacket`. This shape carries what a room asks about
+ * work (status, who offered, who holds it, the skills it was offered against, an
+ * age, and the reason it ended) and has no field a packet body, a `nextIntent`, or
+ * a capability token could ride in. Read a packet in full from `handoff.get`.
+ */
+export type HandoffWorldView = {
+  id: string;
+  status: string;
+  /** Who offered the work. Absent when the World names an id the store lost. */
+  offerer?: string;
+  /** Who holds it now. Absent means nobody has claimed it. */
+  claimer?: string;
+  /** The summary, trimmed and re-scanned. Absent when the scan rejected it. */
+  label?: string;
+  skills: string[];
+  updatedAt: string;
+  /** The agent-authored reason the packet ended. Absent while it is still open. */
+  reason?: string;
+  outcome?: "success" | "failure" | "partial";
+};
+
+/** M.4.1: what `GET /api/worlds/:id/handoffs` answers with. */
+export type WorldHandoffList = {
+  worldId: string;
+  handoffs: HandoffWorldView[];
+};
+
+export type WorldEvidenceView = {
+  id: string;
+  provenance: "recorded" | "attributable";
+  /** First 12 hex characters. Enough to recognise, not to verify. */
+  evidenceHashPrefix: string;
+};
+
+export type WorldSnapshot = {
+  id: string;
+  name: string;
+  status: WorldStatus;
+  ownerHandle: string;
+  activeParticipants: WorldParticipantView[];
+  leftParticipants: WorldParticipantView[];
+  looking: WorldWorkSummary[];
+  handoffs: WorldWorkSummary[];
+  garden: WorldWorkSummary[];
+  /** M.5: sandbox runs bound to this World. Facts only. */
+  runs: WorldSandboxView[];
+  evidence: WorldEvidenceView[];
+  /**
+   * M.3.7: the room's own bounded copy of the last twenty redirects, oldest
+   * first. Published because the audit rows behind them are operator-only.
+   */
+  redirects: WorldRedirectEntry[];
+  createdAt: string;
+  expiresAt: string;
+  committedAt?: string;
+  updatedAt: string | null;
+};
+
+/** M.3.7: one redirect, as the cockpit prints it. */
+export type WorldRedirectEntry = {
+  at: string;
+  handle: string;
+  verb:
+    | "handoff.recall"
+    | "handoff.release"
+    | "looking.close"
+    | "garden.yield"
+    | "garden.stop"
+    | "garden.handoff"
+    | "garden.steer"
+    | "grant.revoke";
+  target: string;
+};
+
+/**
+ * M.2.1: what a join answers with.
+ *
+ * `rejoin` is there so a caller can tell an idempotent retry from a fresh
+ * arrival without a second read, and because the difference is one an agent
+ * should know about: a re-join changed nothing, including the audit trail.
+ */
+export type WorldJoinResult = {
+  participant: WorldParticipant;
+  snapshot: WorldSnapshot;
+  rejoin: boolean;
+};
+
+export type WorldEvidenceRef = {
+  id: string;
+  evidenceHash: string;
+  provenance: "recorded" | "attributable";
+};
+
+export type World = {
+  id: string;
+  name: string;
+  ownerHandle: string;
+  ownerAgentId: string;
+  status: WorldStatus;
+  participants: WorldParticipant[];
+  policy: {
+    worldId: string;
+  };
+  lookingIds: string[];
+  handoffIds: string[];
+  gardenSessionIds: string[];
+  evidenceRefs: WorldEvidenceRef[];
+  createdAt: string;
+  expiresAt: string;
+  committedAt?: string;
+};
+
+/** Listing metadata without full participant and policy detail. */
+export type WorldShell = {
+  id: string;
+  name: string;
+  status: WorldStatus;
+  ownerHandle: string;
+  participantCount: number;
+  resourceCount: number;
+  evidenceCount: number;
+  createdAt: string;
+  expiresAt: string;
+};
+
+/**
+ * M.2.2: the row `GET /api/worlds` actually returns, which is a superset of
+ * `WorldShell`.
+ *
+ * Three composed fields a World row cannot carry, all read at list time:
+ * `ownerIdentity` (the owner's credential rung, from attestation state rather
+ * than trusted from a body, with `unknown` meaning Haven holds no live
+ * credential), `verdict` (whether this deployment would have allowed the World,
+ * and `UNK` when nobody configured a policy), and `admission` (whether it can be
+ * entered right now).
+ *
+ * `admission.requiresAttested` is `null` when the deployment has not answered,
+ * which is not `false`: pair it with your own `identityLevel` from `/api/hello`
+ * rather than treating `true` as a refusal.
+ */
+export type WorldAdmission = {
+  /**
+   * Live, with a seat, allowed by this deployment, and not below its
+   * attestation floor. A World the deployment denies is never enterable, and the
+   * join route refuses it with the same words.
+   */
+  enterable: boolean;
+  /** null when no deployment policy is configured at all. */
+  requiresAttested: boolean | null;
+  /** What is shut, or what is left of it. Never empty. */
+  reason: string;
+};
+
+export type WorldVerdict = {
+  code: "ALW" | "OUT" | "UNK";
+  reason: string;
+};
+
+export type WorldLedgerRow = WorldShell & {
+  /** Work bound to this World, per surface. A count of ids, not of resolvable rows. */
+  lookingCount: number;
+  handoffCount: number;
+  gardenCount: number;
+  ownerIdentity:
+    | "self_attested"
+    | "operator_attested"
+    | "provider_attested"
+    | "historically_evidenced"
+    | "unknown";
+  verdict: WorldVerdict;
+  admission: WorldAdmission;
+};
+
+export type WorldCreateInput = {
+  name: string;
+  objective: string;
+  ttlMs?: number;
+  handle?: string;
+  agentId?: string;
+};
+
+export type WorldCommitInput = {
+  evidenceRefs: WorldEvidenceRef[];
+  handle?: string;
+  agentId?: string;
+};
+
+export type WorldDelegationReceipt = {
+  version: "1.0";
+  worldId: string;
+  commitHash: string;
+  evidenceIds: string[];
+  evidenceHashes: string[];
+  abilityRefs: string[];
+  principal: string;
+  issuedAt: string;
+  signature: string;
 };

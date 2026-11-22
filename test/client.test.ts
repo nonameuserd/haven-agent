@@ -663,7 +663,8 @@ describe("@chitmark/haven-agent", () => {
     const haven = new Haven({
       baseUrl: "https://haven.test",
       credentials: store,
-      fetch: (async () => jsonResponse(200, { ok: true })) as typeof fetch,
+      fetch: (async () =>
+        jsonResponse(200, { pendingWork: [], more: false })) as typeof fetch,
     });
     expect(haven.authorizationHeader()).toBe("Haven agt_1 sig");
     await haven.leave();
@@ -1063,4 +1064,168 @@ describe("@chitmark/haven-agent", () => {
       rationale: "Missing log lines",
     });
   });
+
+  it("world.create, join, and commit hit /api/worlds without capability types", async () => {
+    const { fetchImpl, calls } = mockFetch((call) => {
+      if (call.url.endsWith("/api/worlds") && call.init?.method === "POST") {
+        return jsonResponse(200, { id: "world_sdk1", status: "active" });
+      }
+      if (call.url.endsWith("/api/worlds") && call.init?.method === "GET") {
+        return jsonResponse(200, [{ id: "world_sdk1", status: "active" }]);
+      }
+      if (call.url.endsWith("/join")) {
+        return jsonResponse(200, { handle: "scout-b", role: "member" });
+      }
+      if (call.url.endsWith("/commit")) {
+        return jsonResponse(200, { id: "world_sdk1", status: "committed" });
+      }
+      return jsonResponse(404, { error: "NotFound", message: call.url });
+    });
+    const haven = new Haven({
+      baseUrl: "https://haven.test",
+      handle: "scout",
+      fetch: fetchImpl,
+    });
+
+    const created = await haven.world.create({
+      name: "SDK proves the loop",
+      objective: "Boot a World from the SDK and commit",
+      agentId: "agt_sdk",
+      handle: "scout",
+    });
+    expect(created.id).toBe("world_sdk1");
+    const createCall = calls.find(
+      (c) => c.url.endsWith("/api/worlds") && c.init?.method === "POST",
+    );
+    const createBody = JSON.parse(String(createCall?.init?.body ?? "{}"));
+    expect(createBody).toMatchObject({ name: "SDK proves the loop" });
+    expect(JSON.stringify(createBody)).not.toMatch(/capabilityType/);
+
+    const shells = await haven.world.list();
+    expect(shells).toHaveLength(1);
+    const listCall = calls.find(
+      (c) => c.url.endsWith("/api/worlds") && c.init?.method === "GET",
+    );
+    const listHeaders = (listCall?.init?.headers ?? {}) as Record<string, string>;
+    expect(listHeaders.Authorization).toBeUndefined();
+
+    const member = await haven.world.join("world_sdk1", {
+      handle: "scout-b",
+      agentId: "agt_sdk_b",
+      role: "member",
+    });
+    expect(member.handle).toBe("scout-b");
+
+    const committed = await haven.world.commit("world_sdk1", {
+      evidenceRefs: [{ id: "ev_1", evidenceHash: "abc", provenance: "attributable" }],
+      handle: "scout",
+      agentId: "agt_sdk",
+    });
+    expect(committed.status).toBe("committed");
+    const commitCall = calls.find((c) => c.url.endsWith("/commit"));
+    expect(JSON.parse(String(commitCall?.init?.body ?? "{}"))).toMatchObject({
+      evidenceRefs: [{ id: "ev_1", evidenceHash: "abc", provenance: "attributable" }],
+    });
+  });
+});
+
+it("keeps the continuation in the SDK runtime and rotates identity after leave", async () => {
+  let opens = 0;
+  const oldContinuation = "hvr_" + "a".repeat(32);
+  const { fetchImpl } = mockFetch(({ url, init }) => {
+    if (url.endsWith("/api/agent-session")) {
+      opens++;
+      const body = JSON.parse(String(init?.body));
+      if (opens === 1) expect(body.resumable).toBe(true);
+      else
+        expect((init?.headers as Record<string, string>).Authorization).toBe(
+          `Haven-Resume ${oldContinuation}`,
+        );
+      return jsonResponse(200, {
+        sessionId: "ags_sdk_resume",
+        handle: "sdk-resume",
+        agentId: "agt_sdk_resume",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        actions: ["leave"],
+        sessionToken: `hvs_access_${opens}_abcdefghijklmnop`,
+        resumeToken: opens === 1 ? oldContinuation : "hvr_" + "b".repeat(32),
+      });
+    }
+    expect(url).toContain("/api/agent-session/leave");
+    return jsonResponse(200, { ok: true, handle: "sdk-resume" });
+  });
+  const haven = new Haven({ handle: "sdk-resume", fetch: fetchImpl });
+  const initial = await haven.gateway.open({ resumable: true });
+  await haven.gateway.leave();
+  expect(haven.gateway.token()).toBeNull();
+  expect(haven.gateway.resumeToken()).toBe(oldContinuation);
+  const resumed = await haven.gateway.open({ resume: true });
+  expect(resumed.agentId).toBe(initial.agentId);
+  expect(resumed.sessionToken).not.toBe(initial.sessionToken);
+  await haven.gateway.leave({ forgetResume: true });
+  expect(haven.gateway.resumeToken()).toBeNull();
+});
+
+it.each([409, 503])(
+  "retains the Gateway SDK token after a refused leave (%s)",
+  async (status) => {
+    const { fetchImpl } = mockFetch(({ init }) =>
+      JSON.parse(String(init?.body)).force
+        ? jsonResponse(200, { ok: true, handle: "waiting-sdk" })
+        : jsonResponse(status, {
+            error: status === 409 ? "WorkPending" : "DatabaseError",
+            message: "Credential retained.",
+          }),
+    );
+    const haven = new Haven({ fetch: fetchImpl });
+    haven.gateway.useToken("hvs_waiting_sdk_abcdefghijklmnop");
+    await expect(haven.gateway.leave()).rejects.toMatchObject({ status });
+    expect(haven.gateway.token()).toBe("hvs_waiting_sdk_abcdefghijklmnop");
+    await haven.gateway.leave({ force: true });
+    expect(haven.gateway.token()).toBeNull();
+  },
+);
+
+it("retains the direct SDK credential for pending work and permits forced offline cleanup", async () => {
+  const credential = {
+    agentId: "agt_waiting_direct",
+    handle: "waiting-direct",
+    signature: "runtime-owned-signature",
+  };
+  const store = new MemoryCredentialStore();
+  store.set(credential);
+  const { fetchImpl, calls } = mockFetch(({ url, init }) => {
+    expect(url).toContain("/api/handoff/pending");
+    expect((init?.headers as Record<string, string>).Authorization).toBe(
+      "Haven agt_waiting_direct runtime-owned-signature",
+    );
+    return jsonResponse(200, {
+      pendingWork: [{ id: "hnd_waiting", status: "delivered" }],
+      more: false,
+    });
+  });
+  const haven = new Haven({ fetch: fetchImpl, credentials: store });
+  await expect(haven.leave()).rejects.toMatchObject({
+    status: 409,
+    error: "WorkPending",
+  });
+  expect(store.get()).toEqual(credential);
+  await haven.leave({ force: true });
+  expect(store.get()).toBeNull();
+  expect(calls).toHaveLength(1);
+});
+
+it("keeps the direct SDK credential when its pending-work read is unavailable", async () => {
+  const store = new MemoryCredentialStore();
+  store.set({
+    agentId: "agt_waiting_unavailable",
+    handle: "waiting-unavailable",
+    signature: "runtime-owned-signature",
+  });
+  const { fetchImpl } = mockFetch(() =>
+    jsonResponse(503, { error: "DatabaseError", message: "Unavailable" }),
+  );
+  const haven = new Haven({ fetch: fetchImpl, credentials: store });
+  await expect(haven.leave()).rejects.toMatchObject({ status: 503 });
+  expect(store.get()).not.toBeNull();
 });

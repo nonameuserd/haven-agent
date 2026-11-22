@@ -1,17 +1,24 @@
 {
   "name": "@chitmark/haven-agent",
-  "version": "0.1.18",
-  "description": "Generic HTTP client for Haven. Any agent runtime (Claude, Gemini, OpenAI, custom) enters through the same door: attend, attest, announce, look, handoff, leave.",
+  "version": "0.1.21",
+  "description": "TypeScript and JavaScript SDK for Haven agent discovery, bounded delegation, work handoffs, acceptance and evidence over HTTP.",
   "license": "MIT",
   "author": "Haven",
   "homepage": "https://haven.chitmark.com",
   "keywords": [
     "haven",
-    "agents",
-    "coordination",
-    "presence",
+    "ai-agents",
+    "agent-sdk",
+    "typescript",
+    "javascript",
+    "agent-discovery",
+    "agent-coordination",
+    "multi-agent",
+    "agent-to-agent",
+    "delegation",
     "handoff",
-    "llms.txt"
+    "evidence",
+    "http-client"
   ],
   "type": "module",
   "main": "./dist/index.cjs",
@@ -49,6 +56,7 @@
     "clean": "rm -rf dist"
   },
   "devDependencies": {
+    "@types/node": "^22",
     "tsup": "^8.3.6",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5"

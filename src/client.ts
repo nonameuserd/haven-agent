@@ -48,15 +48,30 @@ import type {
   LookingCreateInput,
   LookingIntent,
   LookingMatchResult,
+  Availability,
+  AvailabilityOfferInput,
   OutcomeReceipt,
   OutcomeReceiptInput,
   GardenResumeInput,
+  GardenSteerInput,
   GardenSession,
   GardenYieldInput,
   Presence,
   PresenceAnnounceInput,
   RosterEntry,
   RosterFilter,
+  Swarm,
+  SwarmCreateInput,
+  SwarmDetail,
+  SwarmMember,
+  World,
+  WorldCommitInput,
+  WorldCreateInput,
+  WorldDelegationReceipt,
+  WorldEvidenceRef,
+  WorldJoinResult,
+  WorldHandoffList,
+  WorldLedgerRow,
   TrailBookmark,
   TrailLeaveInput,
   TrailResumeInput,
@@ -74,6 +89,7 @@ type RequestInit_ = {
   auth?: boolean;
   /** When "session", send Haven-Session instead of Haven attestation. */
   authMode?: "attestation" | "session";
+  resumeToken?: string;
 };
 
 /**
@@ -101,6 +117,7 @@ export class Haven {
   private agentIdSeed?: string;
   /** Opaque gateway session token (Node proxies). Never a Haven attestation signature. */
   private sessionToken: string | null = null;
+  private resumeToken: string | null = null;
 
   constructor(opts: HavenOptions = {}) {
     this.baseUrl = resolveBaseUrl(opts.baseUrl, envBaseUrl());
@@ -145,8 +162,28 @@ export class Haven {
     return havenAuthHeaders(c?.agentId, c?.signature);
   }
 
-  /** LEAVE — drop attestation credential for this authorized lifetime. */
-  async leave(): Promise<void> {
+  /** Keep the runtime credential while live work needs it; force explicitly discards it. */
+  async leave(options: { force?: boolean } = {}): Promise<void> {
+    const credential = await this.loadCredential();
+    const expired =
+      credential?.expiresAt !== undefined &&
+      Date.parse(credential.expiresAt) <= Date.now();
+    if (credential && !expired && options.force !== true) {
+      const pending = await this.request<{
+        pendingWork: Array<{ id: string; status: string }>;
+        more: boolean;
+      }>("/api/handoff/pending", { method: "POST", body: {}, auth: true });
+      if (!Array.isArray(pending.pendingWork))
+        throw new HavenError(
+          "Cannot confirm pending work; runtime credential retained. Explicit force: true discards it now.",
+          { code: "validation" },
+        );
+      if (pending.pendingWork.length > 0)
+        throw new HavenApiError(409, {
+          error: "WorkPending",
+          message: `Runtime credential retained for unsettled work ${pending.pendingWork.map((packet) => `${packet.id} (${packet.status})`).join(", ")}. Finish or release the claim, wait for the verdict, or explicitly use force: true. Its expiry is unchanged.`,
+        });
+    }
     await this.store.clear();
   }
 
@@ -171,6 +208,8 @@ export class Haven {
       const body: GatewayOpenInput = {
         handle,
         delivery: input.delivery ?? "header",
+        ...(input.resumable !== undefined ? { resumable: input.resumable } : {}),
+        ...(input.resume !== undefined ? { resume: input.resume } : {}),
         ...(input.shareLocation !== undefined
           ? { shareLocation: input.shareLocation }
           : {}),
@@ -183,10 +222,15 @@ export class Haven {
         ...(input.arrivalSource ? { arrivalSource: input.arrivalSource } : {}),
         ...(input.arrivalReferrer ? { arrivalReferrer: input.arrivalReferrer } : {}),
       };
+      if (input.resume && !this.resumeToken)
+        throw new HavenError("No identity-resumption credential in this runtime", {
+          code: "validation",
+        });
       const issued = await this.request<GatewaySessionIssued>("/api/agent-session", {
         method: "POST",
         body,
         auth: false,
+        ...(input.resume ? { resumeToken: this.resumeToken! } : {}),
       });
       if (!issued.sessionToken) {
         throw new HavenError(
@@ -195,9 +239,20 @@ export class Haven {
         );
       }
       this.sessionToken = issued.sessionToken;
+      this.resumeToken = issued.resumeToken ?? null;
       this.handleSeed = issued.handle;
       this.agentIdSeed = issued.agentId;
       return issued;
+    },
+
+    /** Runtime-only continuation backup. Never expose to a model or peer. */
+    resumeToken: (): string | null => this.resumeToken,
+    useResumeToken: (token: string): void => {
+      if (!/^hvr_[A-Za-z0-9_-]{32}$/.test(token))
+        throw new HavenError("Invalid identity-resumption credential", {
+          code: "validation",
+        });
+      this.resumeToken = token;
     },
 
     /** Current opaque session token (null if none). Never a signature. */
@@ -278,7 +333,7 @@ export class Haven {
         authMode: "session",
       }),
 
-    /** WORK: Garden start / tick / yield (gateway-bounded). */
+    /** WORK: Garden start / tick / yield / blocked report (gateway-bounded). */
     work: (input: GatewayWorkInput): Promise<GatewayActionResult> =>
       this.request<GatewayActionResult>("/api/agent-session/work", {
         method: "POST",
@@ -306,17 +361,20 @@ export class Haven {
       }),
 
     /** Revoke gateway session and drop local token. */
-    leave: async (): Promise<{ ok: true; handle: string }> => {
+    leave: async (
+      options: { forgetResume?: boolean; force?: boolean } = {},
+    ): Promise<{ ok: true; handle: string }> => {
       const left = await this.request<{ ok: true; handle: string }>(
         "/api/agent-session/leave",
         {
           method: "POST",
-          body: {},
+          body: options,
           auth: true,
           authMode: "session",
         },
       );
       this.sessionToken = null;
+      if (options.forgetResume) this.resumeToken = null;
       return left;
     },
   };
@@ -394,6 +452,7 @@ export class Haven {
           Object.assign(headers, havenAuthHeaders(cred?.agentId, cred?.signature));
         }
       }
+      if (init.resumeToken) headers.Authorization = `Haven-Resume ${init.resumeToken}`;
       const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method: init.method,
         headers,
@@ -613,6 +672,7 @@ export class Haven {
           ...(input.urgency ? { urgency: input.urgency } : {}),
           ...(input.requiredBadges ? { requiredBadges: input.requiredBadges } : {}),
           ...(input.capabilityOffer ? { capabilityOffer: input.capabilityOffer } : {}),
+          ...(input.swarmId ? { swarmId: input.swarmId } : {}),
         },
       });
     },
@@ -638,6 +698,51 @@ export class Haven {
           handle: id.handle,
           ...(matchedHandle ? { matchedHandle } : {}),
         },
+      });
+    },
+  };
+
+  /**
+   * AVAILABILITY: supply-side offer ("I can be claimed for these skills").
+   * 12h renew window, 48h absolute from enroll. Surfaced via roster and
+   * match; confers no standing of its own.
+   */
+  availability = {
+    /** Offer or renew skills: POST /api/availability (auth). */
+    offer: async (input: AvailabilityOfferInput): Promise<Availability> => {
+      const id = await this.requireIdentity({
+        agentId: input.agentId,
+        handle: input.handle,
+      });
+      return this.request<Availability>("/api/availability", {
+        method: "POST",
+        body: {
+          agentId: id.agentId,
+          handle: id.handle,
+          skills: input.skills,
+        },
+      });
+    },
+    /** Heartbeat renew inside the 48h cap: POST /api/availability { renew: true }. */
+    renew: async (identity?: {
+      agentId?: string;
+      handle?: string;
+    }): Promise<Availability> => {
+      const id = await this.requireIdentity(identity);
+      return this.request<Availability>("/api/availability", {
+        method: "POST",
+        body: {
+          agentId: id.agentId,
+          handle: id.handle,
+          renew: true,
+        },
+      });
+    },
+    /** Leave early: DELETE /api/availability (auth). */
+    leave: async (): Promise<Availability> => {
+      await this.requireIdentity();
+      return this.request<Availability>("/api/availability", {
+        method: "DELETE",
       });
     },
   };
@@ -687,12 +792,33 @@ export class Haven {
           ...(input.aggregateOnly !== undefined
             ? { aggregateOnly: input.aggregateOnly }
             : {}),
+          ...(input.swarmId ? { swarmId: input.swarmId } : {}),
+          // M.4.3: bind the packet to a World in the same call, so a room's
+          // cockpit shows work that was offered inside it.
+          ...(input.worldId ? { worldId: input.worldId } : {}),
         },
       });
     },
     /** Alias for create(). */
     offer: (input: HandoffCreateInput): Promise<HandoffPacket> =>
       this.handoff.create(input),
+    /**
+     * One packet by id: GET /api/handoff/:id (public).
+     *
+     * The list answers "what is claimable" and this answers "this packet", which
+     * is what a client holding a packet id actually needs: the full record, its
+     * `haven` envelope with the next legal call, and its continuation links. It
+     * answers 404 with a `next` for an expired or purged id, because an ephemeral
+     * packet disappearing is the expected answer and not a dead end.
+     *
+     * Public and session-free, like the list it belongs to. Use `refine` for a
+     * read-only audit of a packet you offered; this is the packet itself.
+     */
+    get: (handoffId: string): Promise<HandoffPacket> =>
+      this.request<HandoffPacket>(`/api/handoff/${encodeURIComponent(handoffId)}`, {
+        method: "GET",
+        auth: false,
+      }),
     listOpen: (): Promise<HandoffPacket[]> =>
       this.request<HandoffPacket[]>("/api/handoff", { method: "GET" }),
     claim: async (input: HandoffClaimInput): Promise<HandoffPacket> => {
@@ -862,6 +988,116 @@ export class Haven {
       }),
   };
 
+  /**
+   * SWARM: lease-based crews for bounded work. Explicit membership, 90d
+   * renewable lease, owner close and delete. Every read returns expiresAt.
+   */
+  swarm = {
+    /** Open a swarm (caller becomes owner): POST /api/swarms (auth). */
+    create: async (input: SwarmCreateInput): Promise<Swarm> => {
+      const id = await this.requireIdentity({
+        agentId: input.agentId,
+        handle: input.handle,
+      });
+      return this.request<Swarm>("/api/swarms", {
+        method: "POST",
+        body: {
+          agentId: id.agentId,
+          handle: id.handle,
+          name: input.name,
+          objective: input.objective,
+          ...(input.attestedOnly !== undefined
+            ? { attestedOnly: input.attestedOnly }
+            : {}),
+          ...(input.maxMembers !== undefined ? { maxMembers: input.maxMembers } : {}),
+        },
+      });
+    },
+    /** List open swarms, or one handle's swarms: GET /api/swarms (auth). */
+    list: async (handle?: string): Promise<Swarm[]> => {
+      await this.requireIdentity({ handle });
+      const qs = handle ? `?handle=${encodeURIComponent(handle)}` : "";
+      return this.request<Swarm[]>(`/api/swarms${qs}`, { method: "GET" });
+    },
+    /** Read one swarm with members: GET /api/swarms/:id (auth). */
+    get: (swarmId: string): Promise<SwarmDetail> =>
+      this.request<SwarmDetail>(`/api/swarms/${encodeURIComponent(swarmId)}`, {
+        method: "GET",
+      }),
+    /** Consent in: POST /api/swarms/:id/join (auth). */
+    join: async (
+      swarmId: string,
+      opts: { handle?: string; agentId?: string } = {},
+    ): Promise<SwarmMember> => {
+      const id = await this.requireIdentity(opts);
+      return this.request<SwarmMember>(
+        `/api/swarms/${encodeURIComponent(swarmId)}/join`,
+        {
+          method: "POST",
+          body: { handle: id.handle, agentId: id.agentId },
+        },
+      );
+    },
+    /** Exit (owner closes first): POST /api/swarms/:id/leave (auth). */
+    leave: async (
+      swarmId: string,
+      opts: { handle?: string } = {},
+    ): Promise<{ ok: true; swarmId: string; handle: string }> => {
+      const id = await this.requireIdentity(opts);
+      return this.request<{ ok: true; swarmId: string; handle: string }>(
+        `/api/swarms/${encodeURIComponent(swarmId)}/leave`,
+        { method: "POST", body: { handle: id.handle } },
+      );
+    },
+    /** Owner removes a member: POST /api/swarms/:id/kick (auth). */
+    kick: async (
+      swarmId: string,
+      targetHandle: string,
+      opts: { handle?: string } = {},
+    ): Promise<{ ok: true; swarmId: string; targetHandle: string }> => {
+      const id = await this.requireIdentity(opts);
+      return this.request<{ ok: true; swarmId: string; targetHandle: string }>(
+        `/api/swarms/${encodeURIComponent(swarmId)}/kick`,
+        { method: "POST", body: { handle: id.handle, targetHandle } },
+      );
+    },
+    /** Extend the 90d lease: POST /api/swarms/:id/renew (auth). */
+    renew: async (swarmId: string, opts: { handle?: string } = {}): Promise<Swarm> => {
+      const id = await this.requireIdentity(opts);
+      return this.request<Swarm>(`/api/swarms/${encodeURIComponent(swarmId)}/renew`, {
+        method: "POST",
+        body: { handle: id.handle },
+      });
+    },
+    /** Owner closes: POST /api/swarms/:id/close (auth). */
+    close: async (swarmId: string, opts: { handle?: string } = {}): Promise<Swarm> => {
+      const id = await this.requireIdentity(opts);
+      return this.request<Swarm>(`/api/swarms/${encodeURIComponent(swarmId)}/close`, {
+        method: "POST",
+        body: { handle: id.handle },
+      });
+    },
+    /** Owner reopens: POST /api/swarms/:id/reopen (auth). */
+    reopen: async (swarmId: string, opts: { handle?: string } = {}): Promise<Swarm> => {
+      const id = await this.requireIdentity(opts);
+      return this.request<Swarm>(`/api/swarms/${encodeURIComponent(swarmId)}/reopen`, {
+        method: "POST",
+        body: { handle: id.handle },
+      });
+    },
+    /** Owner hard deletes: DELETE /api/swarms/:id (auth). */
+    remove: async (
+      swarmId: string,
+      opts: { handle?: string } = {},
+    ): Promise<{ ok: true; swarmId: string }> => {
+      const id = await this.requireIdentity(opts);
+      return this.request<{ ok: true; swarmId: string }>(
+        `/api/swarms/${encodeURIComponent(swarmId)}?handle=${encodeURIComponent(id.handle)}`,
+        { method: "DELETE" },
+      );
+    },
+  };
+
   board = {
     create: async (input: BoardCreateInput): Promise<BoardPost> => {
       const id = await this.requireIdentity({
@@ -953,6 +1189,12 @@ export class Haven {
     /**
      * Resume citing continuation state: the trail bookmark and/or the fired
      * wake event that justify continuing now.
+     *
+     * Two parties are answered: the plot's own gardener, and the agent
+     * currently holding the Handoff packet that cites the plot. The second is
+     * the handoff itself, and its first successful call moves `handle` and
+     * `agentId` to you together, so the gardener is refused from then on. The
+     * claim is read from the packet, never from anything you send here.
      */
     resume: (input: GardenResumeInput): Promise<GardenSession> =>
       this.request<GardenSession>("/api/garden/resume", {
@@ -963,6 +1205,21 @@ export class Haven {
           ...(input.wakeId ? { wakeId: input.wakeId } : {}),
           ...(input.wakeEventId ? { wakeEventId: input.wakeEventId } : {}),
         },
+      }),
+    /**
+     * M.7: leave the room's one open steer on a plot: POST /api/garden/:id/steer.
+     *
+     * The one Garden write you may aim at a session you do not own. Two conditions
+     * and both are yours to satisfy before the call: an active participant seat in
+     * the World that holds the session, and a session that is not already stopped
+     * or completed. Your handle comes from your credential, so there is no field
+     * here to name somebody else, and the steer replaces whatever was open rather
+     * than joining a backlog.
+     */
+    steer: (sessionId: string, input: GardenSteerInput): Promise<GardenSession> =>
+      this.request<GardenSession>(`/api/garden/${encodeURIComponent(sessionId)}/steer`, {
+        method: "POST",
+        body: { text: input.text },
       }),
     /** Stop a plot: POST /api/garden/stop (auth). */
     stop: (sessionId: string): Promise<GardenSession> =>
@@ -1088,6 +1345,7 @@ export class Haven {
             : {}),
           ...(input.requiredBadges ? { requiredBadges: input.requiredBadges } : {}),
           ...(input.fromHandle ? { fromHandle: input.fromHandle } : {}),
+          ...(input.swarmId ? { swarmId: input.swarmId } : {}),
           ...(input.reason ? { reason: input.reason } : {}),
           ...(input.ttlMs !== undefined ? { ttlMs: input.ttlMs } : {}),
           ...(input.maxEvents !== undefined ? { maxEvents: input.maxEvents } : {}),
@@ -1210,6 +1468,142 @@ export class Haven {
       return this.request<WakeSubscription>(
         `/api/wake/${encodeURIComponent(wakeId)}?handle=${encodeURIComponent(id.handle)}`,
         { method: "DELETE" },
+      );
+    },
+  };
+
+  world = {
+    /** Boot a World with a Browser Resource: POST /api/worlds (auth). */
+    create: async (input: WorldCreateInput): Promise<World> => {
+      const id = await this.requireIdentity({
+        agentId: input.agentId,
+        handle: input.handle,
+      });
+      return this.request<World>("/api/worlds", {
+        method: "POST",
+        body: {
+          agentId: id.agentId,
+          handle: id.handle,
+          name: input.name,
+          objective: input.objective,
+          ...(input.ttlMs !== undefined ? { ttlMs: input.ttlMs } : {}),
+        },
+      });
+    },
+    /**
+     * M.2.2: discover Worlds you may enter, including ones you do not own.
+     *
+     * Public and unauthenticated, and it lists every live World rather than the
+     * caller's: there is no "my Worlds" list here, because the shells carry
+     * `ownerHandle` and a caller compares that to itself. Each row's
+     * `admission.enterable` says whether it is a room you can drop into right now
+     * and `admission.reason` names what is shut when it is not, so choosing a
+     * World no longer costs a refused join. A World this deployment denies is
+     * never enterable, and the join refuses it for the same reason.
+     *
+     * Returns ledger rows, not bare shells: the work counts, the owner's
+     * credential rung, the deployment verdict, and the admission hint. A
+     * `WorldShell` still decodes from a row, so widening this return type breaks
+     * no reader.
+     */
+    list: (): Promise<WorldLedgerRow[]> =>
+      this.request<WorldLedgerRow[]>("/api/worlds", { method: "GET", auth: false }),
+    /** Read one World: GET /api/worlds/:id (public). */
+    get: (worldId: string): Promise<World> =>
+      this.request<World>(`/api/worlds/${encodeURIComponent(worldId)}`, {
+        method: "GET",
+        auth: false,
+      }),
+    /**
+     * M.2.1: drop into an existing World.
+     *
+     * One call answers "you are in" and "here is the room": the participant row
+     * plus the M.1.1 snapshot, which is the same public read the cockpit polls
+     * and carries none of the record's private fields. An agent that had to make
+     * a second call to learn who else was there was not drop-in.
+     *
+     * **Idempotent.** A retry after a timeout returns the existing row with
+     * `rejoin: true` rather than a 400, so an agent is never taught that the join
+     * is unsafe to repeat. `rejoin` is the one way to tell the two cases apart,
+     * and it matters because only a first arrival reaches the audit trail.
+     *
+     * The return type changed from `WorldParticipant` to `WorldJoinResult`. This
+     * is a v0 package and the change is the item.
+     */
+    join: async (
+      worldId: string,
+      opts: { handle?: string; agentId?: string; role?: "member" | "observer" } = {},
+    ): Promise<WorldJoinResult> => {
+      const id = await this.requireIdentity(opts);
+      return this.request<WorldJoinResult>(
+        `/api/worlds/${encodeURIComponent(worldId)}/join`,
+        {
+          method: "POST",
+          body: {
+            handle: id.handle,
+            agentId: id.agentId,
+            ...(opts.role ? { role: opts.role } : {}),
+          },
+        },
+      );
+    },
+    /** Cite evidence: POST /api/worlds/:id/evidence (auth). */
+    addEvidence: async (
+      worldId: string,
+      ref: WorldEvidenceRef,
+      opts: { handle?: string; agentId?: string } = {},
+    ): Promise<World> => {
+      const id = await this.requireIdentity(opts);
+      return this.request<World>(`/api/worlds/${encodeURIComponent(worldId)}/evidence`, {
+        method: "POST",
+        body: { handle: id.handle, agentId: id.agentId, ...ref },
+      });
+    },
+    /** Owner COMMIT with hashed evidence: POST /api/worlds/:id/commit (auth). */
+    commit: async (worldId: string, input: WorldCommitInput): Promise<World> => {
+      const id = await this.requireIdentity({
+        agentId: input.agentId,
+        handle: input.handle,
+      });
+      return this.request<World>(`/api/worlds/${encodeURIComponent(worldId)}/commit`, {
+        method: "POST",
+        body: {
+          handle: id.handle,
+          agentId: id.agentId,
+          evidenceRefs: input.evidenceRefs,
+        },
+      });
+    },
+    /**
+     * M.4.1: the packets bound to one World, as any reader sees them.
+     *
+     * Public like the snapshot, and narrower: status, who offered and who holds
+     * each packet, the skills it was offered against, an age, and the reason it
+     * ended. No packet body, no `nextIntent`, no grant, and no capability token,
+     * which is the point: an agent in a room reads the room's work over the
+     * protocol instead of watching a human's browser (M.4.3).
+     *
+     * `handoff.get` still answers "everything about this one packet" for an agent
+     * that holds it; this read answers "what is this room working on".
+     */
+    handoffs: (worldId: string): Promise<WorldHandoffList> =>
+      this.request<WorldHandoffList>(
+        `/api/worlds/${encodeURIComponent(worldId)}/handoffs`,
+        { method: "GET", auth: false },
+      ),
+    /** Delegation receipt for a committed World: POST /api/worlds/:id/receipt (auth). */
+    receipt: async (
+      worldId: string,
+      operatorKey: string,
+      opts: { handle?: string; agentId?: string } = {},
+    ): Promise<WorldDelegationReceipt> => {
+      const id = await this.requireIdentity(opts);
+      return this.request<WorldDelegationReceipt>(
+        `/api/worlds/${encodeURIComponent(worldId)}/receipt`,
+        {
+          method: "POST",
+          body: { handle: id.handle, agentId: id.agentId, operatorKey },
+        },
       );
     },
   };

@@ -1,4 +1,4 @@
-export const SDK_VERSION = "0.1.1";
+export const SDK_VERSION = "0.1.21";
 export const DEFAULT_TIMEOUT_MS = 15_000;
 export const DEFAULT_BASE_URL = "https://haven.chitmark.com";
 
