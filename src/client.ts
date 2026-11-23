@@ -24,6 +24,7 @@ import type {
   GatewayActionResult,
   GatewayFindAgentInput,
   GatewayHandoffInput,
+  HandoffWaitResult,
   GatewayOpenInput,
   GatewayOutcomeInput,
   GatewayRequestCollaborationInput,
@@ -83,6 +84,7 @@ import type {
 } from "./types.js";
 
 type RequestInit_ = {
+  timeoutMs?: number;
   method: string;
   body?: unknown;
   /** When false, skip Authorization (public routes). Default true. */
@@ -327,11 +329,65 @@ export class Haven {
     /** HANDOFF: offer / claim / complete / list / claim_next (chainable claimable-work). */
     handoff: (input: GatewayHandoffInput): Promise<GatewayActionResult> =>
       this.request<GatewayActionResult>("/api/agent-session/handoff", {
+        ...(input.op === "wait"
+          ? {
+              timeoutMs: Math.max(
+                this.timeoutMs,
+                ((input.timeoutSeconds ?? 20) + 5) * 1000,
+              ),
+            }
+          : {}),
         method: "POST",
         body: input,
         auth: true,
         authMode: "session",
       }),
+
+    /** Actively continue bounded reads until a verdict/action or runtime budget, without a model prompt. */
+    awaitVerdict: async (
+      handoffId: string,
+      options: {
+        timeoutMs?: number;
+        signal?: AbortSignal;
+        onObservation?: (result: HandoffWaitResult) => void | Promise<void>;
+      } = {},
+    ): Promise<HandoffWaitResult> => {
+      const budget = options.timeoutMs ?? 300_000;
+      if (!Number.isFinite(budget) || budget < 0 || budget > 3_600_000)
+        throw new HavenError("Verdict wait budget must be 0-3600000 milliseconds", {
+          code: "validation",
+        });
+      const deadline = Date.now() + budget;
+      let afterRevision: string | undefined;
+      while (true) {
+        if (options.signal?.aborted)
+          throw new HavenError("Verdict wait cancelled; credential retained", {
+            code: "aborted",
+          });
+        const seconds = Math.min(
+          20,
+          Math.max(0, Math.floor((deadline - Date.now()) / 1000)),
+        );
+        const result = (await this.gateway.handoff({
+          op: "wait",
+          handoffId,
+          timeoutSeconds: seconds,
+          afterRevision,
+        })) as HandoffWaitResult;
+        if (!result.followUp || typeof result.followUp.requiresContinuation !== "boolean")
+          throw new HavenError("Server did not return a lifecycle observation", {
+            code: "validation",
+          });
+        afterRevision = result.followUp.revision;
+        await options.onObservation?.(result);
+        if (!result.followUp.requiresContinuation || Date.now() >= deadline)
+          return result;
+        // Avoid a tight retry loop if a proxy returns a pending observation immediately.
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(1000, Math.max(0, deadline - Date.now()))),
+        );
+      }
+    },
 
     /** WORK: Garden start / tick / yield / blocked report (gateway-bounded). */
     work: (input: GatewayWorkInput): Promise<GatewayActionResult> =>
@@ -429,7 +485,8 @@ export class Haven {
 
   private async request<T>(path: string, init: RequestInit_): Promise<T> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const requestTimeout = init.timeoutMs ?? this.timeoutMs;
+    const timer = setTimeout(() => controller.abort(), requestTimeout);
     try {
       const headers: Record<string, string> = {
         Accept: "application/json",
@@ -490,7 +547,7 @@ export class Haven {
       if (e instanceof HavenApiError) throw e;
       if (e instanceof HavenError) throw e;
       if ((e as { name?: string })?.name === "AbortError") {
-        throw new HavenError(`Request timed out after ${this.timeoutMs}ms`, {
+        throw new HavenError(`Request timed out after ${requestTimeout}ms`, {
           code: "timeout",
         });
       }
@@ -1339,6 +1396,7 @@ export class Haven {
           handle: id.handle,
           ...(input.surfaces ? { surfaces: input.surfaces } : {}),
           skills: input.skills,
+          ...(input.handoffId ? { handoffId: input.handoffId } : {}),
           ...(input.events ? { events: input.events } : {}),
           ...(input.attestedOnly !== undefined
             ? { attestedOnly: input.attestedOnly }

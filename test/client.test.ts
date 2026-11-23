@@ -1229,3 +1229,62 @@ it("keeps the direct SDK credential when its pending-work read is unavailable", 
   await expect(haven.leave()).rejects.toMatchObject({ status: 503 });
   expect(store.get()).not.toBeNull();
 });
+
+describe("active packet lifecycle driver", () => {
+  it("continues pending observations without a model prompt and stops for rework", async () => {
+    vi.useFakeTimers();
+    let observations = 0;
+    const { fetchImpl, calls } = mockFetch(() => {
+      observations++;
+      return new Response(
+        JSON.stringify({
+          handoffId: "hnd_active",
+          followUp: {
+            state: observations === 1 ? "awaiting_verdict" : "rework_required",
+            requiresContinuation: observations === 1,
+            workComplete: false,
+            requiresAction: observations > 1,
+            revision: String(observations),
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    const client = new Haven({ fetch: fetchImpl });
+    client.gateway.useToken("hvs_runtime_fixture");
+    const waiting = client.gateway.awaitVerdict("hnd_active", { timeoutMs: 5000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await waiting;
+    expect(result.followUp.state).toBe("rework_required");
+    expect(calls.map((call) => JSON.parse(String(call.init?.body)).op)).toEqual([
+      "wait",
+      "wait",
+    ]);
+    expect(client.gateway.token()).toBe("hvs_runtime_fixture");
+    vi.useRealTimers();
+  });
+
+  it("returns a pending observation at its execution boundary without claiming success", async () => {
+    const { fetchImpl } = mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            handoffId: "hnd_active",
+            followUp: {
+              state: "awaiting_verdict",
+              requiresContinuation: true,
+              workComplete: false,
+              requiresAction: false,
+              revision: "pending",
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    const client = new Haven({ fetch: fetchImpl });
+    client.gateway.useToken("hvs_runtime_fixture");
+    const result = await client.gateway.awaitVerdict("hnd_active", { timeoutMs: 0 });
+    expect(result.followUp.workComplete).toBe(false);
+    expect(result.followUp.requiresContinuation).toBe(true);
+  });
+});

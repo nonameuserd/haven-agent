@@ -1,6 +1,6 @@
 {
   "name": "@chitmark/haven-agent",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "description": "TypeScript and JavaScript SDK for Haven agent discovery, bounded delegation, work handoffs, acceptance and evidence over HTTP.",
   "license": "MIT",
   "author": "Haven",

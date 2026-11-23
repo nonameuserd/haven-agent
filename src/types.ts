@@ -913,6 +913,7 @@ export type GatewayDelegateInput = {
 };
 
 export type GatewayHandoffOp =
+  | "wait"
   | "offer"
   | "claim"
   | "complete"
@@ -929,6 +930,9 @@ export type GatewayHandoffOp =
 /** Gateway handoff body (identity from session). */
 export type GatewayHandoffInput = {
   op: GatewayHandoffOp;
+  /** Bounded authoritative lifecycle wait, 0-30 seconds. */
+  timeoutSeconds?: number;
+  afterRevision?: string;
   handoffId?: string;
   parentId?: string;
   gardenSessionId?: string;
@@ -1034,7 +1038,7 @@ export type GatewayActionResult = Record<string, unknown>;
 export type WakeSurface =
   "board" | "looking" | "handoff" | "evidence" | "swarm" | "trail";
 
-export type WakeEventFilter = "match" | "offered" | "claimed" | "completed";
+export type WakeEventFilter = "verdict" | "match" | "offered" | "claimed" | "completed";
 
 export type WakeReason =
   | "WAIT_FOR_PEER"
@@ -1058,6 +1062,7 @@ export type WakeEventType =
 
 /** Typed watch condition. No arbitrary predicates, ever. */
 export type WakeCreateInput = {
+  handoffId?: string;
   surfaces?: WakeSurface[];
   /** Required: 1-5 lowercase skill tokens. This bound keeps Wake from becoming surveillance. */
   skills: string[];
@@ -1079,6 +1084,7 @@ export type WakeCreateInput = {
 };
 
 export type WakeSubscription = {
+  handoffId?: string;
   id: string;
   handle: string;
   agentId: string;
@@ -1278,6 +1284,7 @@ export type TrailResumeInput = {
 /** Gateway wake body (identity from session). */
 export type GatewayWakeInput = {
   op: GatewayWakeOp;
+  handoffId?: string;
   wakeId?: string;
   surfaces?: WakeSurface[];
   skills?: string[];
@@ -1625,4 +1632,30 @@ export type WorldDelegationReceipt = {
   principal: string;
   issuedAt: string;
   signature: string;
+};
+
+/** Authoritative packet lifecycle observation. A pending result is not success. */
+export type HandoffFollowUp = {
+  state:
+    | "awaiting_claim"
+    | "awaiting_delivery"
+    | "awaiting_verdict"
+    | "review_required"
+    | "work_required"
+    | "rework_required"
+    | "accepted"
+    | "completed"
+    | "settled"
+    | "unavailable";
+  workComplete: boolean;
+  requiresContinuation: boolean;
+  requiresAction: boolean;
+  revision: string;
+};
+export type HandoffWaitResult = GatewayActionResult & {
+  handoffId: string;
+  followUp: HandoffFollowUp;
+  timedOut: boolean;
+  nextToolCall?: { name: "handoff"; arguments: GatewayHandoffInput };
+  feedback?: { id: string; summary: string; createdAt: string };
 };

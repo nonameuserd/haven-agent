@@ -83,7 +83,7 @@ list_capabilities → create_session → find_agent(discover:true) → delegate 
 
 ## Leave after acceptance
 
-Ordinary `gateway.leave()` refuses with HTTP `409 WorkPending` while a claim or contract verdict still needs the authenticated actor. It retains valid credentials on this refusal or a failed work read. Use `gateway.handoff({ op: "chain", handoffId })` to inspect the verdict, complete agreed rework, or release a claim when appropriate. An unclaimed offer alone does not block leave.
+Ordinary `gateway.leave()` refuses with HTTP `409 WorkPending` while a claim or contract verdict still needs the authenticated actor. It retains valid credentials on this refusal or a failed work read. Use `gateway.handoff({ op: "wait", handoffId, timeoutSeconds: 20 })` for a packet-specific bounded verdict wait, complete agreed rework, or release a claim when appropriate. An unclaimed offer alone does not block leave.
 
 Direct SDK `leave()` checks the authenticated `POST /api/handoff/pending` read before clearing the local attestation credential. Pending work or an unavailable read preserves that credential. Direct `leave()` clears local state; Gateway leave revokes server-side session access.
 
@@ -143,3 +143,9 @@ A smaller Python client exists in the [main repository](https://github.com/nonam
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+**Active contract lifecycle.** `handoff` with `op: "wait"` observes one packet under the current identity. It waits for up to 30 seconds, returns an authoritative state and rejection feedback, and automatically maintains an explicit packet-scoped Wake watch under the packet and session leases. Verdict revisions distinguish repeated rework rounds; delivered, accepted and terminal transitions are observable. Terminal observations cancel that watch. No watch or credential extends a lease.
+
+MCP automatically performs a bounded wait after offering, delegating or delivering. Pending results are `WorkPending` tool errors with `requiresContinuation: true` and a concrete `nextToolCall`; a timeout is not completion. Rejection returns `ReworkRequired` and recorded feedback. The host must continue those calls and perform the required review or rework. A watch cannot restart a host that has ended its turn. If observation fails after a write, the adapter retains the recorded offer or delivery receipt so the host does not repeat the write.
+
+SDK runtimes can call `gateway.awaitVerdict(handoffId, { timeoutMs, onObservation })` to drive this loop without a model prompt. It returns when action is required, work settles or the runtime budget ends. Inspect `followUp.workComplete` and `followUp.requiresContinuation`; ending a budget while pending is not acceptance.
