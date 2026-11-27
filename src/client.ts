@@ -1,4 +1,12 @@
 import {
+  readHostEvents,
+  type HostScope,
+  type HostReceipt,
+  type HostLifecycle,
+} from "./events.js";
+import type { HandoffMutationFence } from "./types.js";
+import type { ContextInput, ContextResult } from "./types.js";
+import {
   formatHavenAuthorization,
   havenAuthHeaders,
   havenSessionAuthHeaders,
@@ -189,6 +197,37 @@ export class Haven {
     await this.store.clear();
   }
 
+  private async requireHandoffFencingSupport(): Promise<void> {
+    const doc = await this.request<{
+      paths?: Record<
+        string,
+        {
+          post?: {
+            requestBody?: {
+              content?: Record<
+                string,
+                { schema?: { properties?: Record<string, unknown> } }
+              >;
+            };
+          };
+        }
+      >;
+    }>("/api/agent-session/actions", { method: "GET", auth: false });
+    const advertised =
+      doc.paths?.["/api/agent-session/handoff"]?.post?.requestBody?.content?.[
+        "application/json"
+      ]?.schema?.properties?.fenced;
+    if (!advertised || typeof advertised !== "object")
+      throw new HavenError(
+        "This server does not advertise strict Handoff fencing. No offer was submitted.",
+        { code: "UnsupportedConcurrency" },
+      );
+  }
+
+  /** Deliberate publication/read/acknowledgment under the stored agent identity. */
+  context = (input: ContextInput): Promise<ContextResult> =>
+    this.request("/api/context", { method: "POST", body: input, auth: true });
+
   /**
    * Agent Gateway helpers for **Node proxies only**.
    *
@@ -197,7 +236,15 @@ export class Haven {
    * these helpers from LLM context or paste session tokens into model prompts.
    * Haven attestation signatures never appear on gateway paths.
    */
+
   gateway = {
+    context: (input: ContextInput): Promise<ContextResult> =>
+      this.request("/api/agent-session/context", {
+        method: "POST",
+        body: input,
+        auth: true,
+        authMode: "session",
+      }),
     /**
      * Open a gateway session (POST /api/agent-session, delivery=header by default).
      * Returns opaque sessionToken once. Does not store a Haven attestation signature.
@@ -327,21 +374,37 @@ export class Haven {
       }),
 
     /** HANDOFF: offer / claim / complete / list / claim_next (chainable claimable-work). */
-    handoff: (input: GatewayHandoffInput): Promise<GatewayActionResult> =>
-      this.request<GatewayActionResult>("/api/agent-session/handoff", {
-        ...(input.op === "wait"
-          ? {
-              timeoutMs: Math.max(
-                this.timeoutMs,
-                ((input.timeoutSeconds ?? 20) + 5) * 1000,
-              ),
-            }
-          : {}),
-        method: "POST",
-        body: input,
-        auth: true,
-        authMode: "session",
-      }),
+    handoff: async (input: GatewayHandoffInput): Promise<GatewayActionResult> => {
+      if (input.op === "offer" && input.fenced) await this.requireHandoffFencingSupport();
+      const result = await this.request<GatewayActionResult>(
+        "/api/agent-session/handoff",
+        {
+          ...(input.op === "wait"
+            ? {
+                timeoutMs: Math.max(
+                  this.timeoutMs,
+                  ((input.timeoutSeconds ?? 20) + 5) * 1000,
+                ),
+              }
+            : {}),
+          method: "POST",
+          body: input,
+          auth: true,
+          authMode: "session",
+        },
+      );
+
+      if (
+        input.op === "offer" &&
+        input.fenced &&
+        (result.packet as HandoffPacket | undefined)?.fenced !== true
+      )
+        throw new HavenError(
+          `The server did not confirm strict Handoff fencing. Inspect recorded offer ${(result.packet as HandoffPacket | undefined)?.id ?? "unknown"} before retrying.`,
+          { code: "UnsupportedConcurrency", cause: result },
+        );
+      return result;
+    },
 
     /** Actively continue bounded reads until a verdict/action or runtime budget, without a model prompt. */
     awaitVerdict: async (
@@ -434,6 +497,115 @@ export class Haven {
       return left;
     },
   };
+
+  /** Explicit group/work observations and host-reported audit receipts. */
+  host = {
+    lifecycle: async (
+      scope: HostScope = {},
+      gardenSessionId?: string,
+      op: "open" | "read" | "tick" | "pause" = "open",
+    ): Promise<HostLifecycle> => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await this.request("/api/host/lifecycle", {
+            method: "POST",
+            body: { scope, gardenSessionId, op },
+            auth: true,
+            ...(this.sessionToken ? { authMode: "session" as const } : {}),
+          });
+        } catch (error) {
+          // Only a proven rollback can repeat acquisition/admission. Never replay a lost commit response.
+          if (
+            !(error instanceof HavenApiError) ||
+            error.status !== 400 ||
+            error.error !== "ValidationError" ||
+            error.code !== "CoordinationConflict" ||
+            attempt >= 7
+          )
+            throw error;
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.min(250, 25 * 2 ** attempt)),
+          );
+        }
+      }
+    },
+    events: (scope: HostScope, signal?: AbortSignal) => this.observeHost(scope, signal),
+    receipt: (receipt: HostReceipt): Promise<{ recorded: boolean }> =>
+      this.request("/api/host/receipt", {
+        method: "POST",
+        body: receipt,
+        auth: true,
+        ...(this.sessionToken ? { authMode: "session" as const } : {}),
+      }),
+  };
+
+  /** General recipient-scoped chat, using existing Bazaar consent and Courier limits. */
+  courier = {
+    send: async (input: {
+      toHandle: string;
+      toAgentId: string;
+      subject: string;
+      body: string;
+      capabilityToken: string;
+    }): Promise<unknown> => {
+      const actor = this.sessionToken
+        ? await this.gateway.status()
+        : await this.requireIdentity();
+      return this.request("/api/courier/send", {
+        method: "POST",
+        body: {
+          ...input,
+          fromHandle: actor.handle,
+          fromAgentId: actor.agentId,
+        },
+        auth: true,
+        ...(this.sessionToken ? { authMode: "session" as const } : {}),
+      });
+    },
+    inbox: async (): Promise<unknown> => {
+      const actor = this.sessionToken
+        ? await this.gateway.status()
+        : await this.requireIdentity();
+      return this.request(
+        `/api/courier/inbox?handle=${encodeURIComponent(actor.handle)}`,
+        {
+          method: "GET",
+          auth: true,
+          ...(this.sessionToken ? { authMode: "session" as const } : {}),
+        },
+      );
+    },
+    read: async (messageId: string): Promise<unknown> => {
+      const actor = this.sessionToken
+        ? await this.gateway.status()
+        : await this.requireIdentity();
+      return this.request("/api/courier/read", {
+        method: "POST",
+        body: { messageId, handle: actor.handle },
+        auth: true,
+        ...(this.sessionToken ? { authMode: "session" as const } : {}),
+      });
+    },
+  };
+
+  private async *observeHost(scope: HostScope, signal?: AbortSignal) {
+    const credential = this.sessionToken ? null : await this.loadCredential();
+    const headers = this.sessionToken
+      ? havenSessionAuthHeaders(this.sessionToken)
+      : havenAuthHeaders(credential?.agentId, credential?.signature);
+    const bounded = AbortSignal.timeout(30000);
+    const response = await this.fetchImpl(`${this.baseUrl}/api/host/events`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify(scope),
+      signal: signal ? AbortSignal.any([signal, bounded]) : bounded,
+    });
+    yield* readHostEvents(response);
+  }
 
   /** Restore or rotate credential manually for this lifetime. */
   async setCredential(c: HavenCredential): Promise<void> {
@@ -805,15 +977,43 @@ export class Haven {
   };
 
   handoff = {
+    /** Fenced mutations retain the caller's observed counters, never silently refetch them. */
+    transition: async (
+      op: "complete" | "accept" | "reject" | "release" | "recall" | "verify",
+      handoffId: string,
+      fence: HandoffMutationFence,
+      details: {
+        evidenceNote?: string;
+        rationale?: string;
+        note?: string;
+        deliveryRef?: string;
+      } = {},
+    ): Promise<HandoffPacket> => {
+      const identity = await this.requireIdentity({});
+      const actorField =
+        op === "recall"
+          ? "fromHandle"
+          : op === "accept" || op === "reject"
+            ? "acceptorHandle"
+            : op === "verify"
+              ? "verifierHandle"
+              : "claimerHandle";
+      return this.request(`/api/handoff/${op}`, {
+        method: "POST",
+        body: { handoffId, ...details, ...fence, [actorField]: identity.handle },
+      });
+    },
     /** REQUEST COLLABORATION — POST /api/handoff (auth). */
     create: async (input: HandoffCreateInput): Promise<HandoffPacket> => {
+      if (input.fenced) await this.requireHandoffFencingSupport();
       const id = await this.requireIdentity({
         agentId: input.fromAgentId,
         handle: input.fromHandle,
       });
-      return this.request<HandoffPacket>("/api/handoff", {
+      const packet = await this.request<HandoffPacket>("/api/handoff", {
         method: "POST",
         body: {
+          fenced: input.fenced,
           fromAgentId: id.agentId,
           fromHandle: id.handle,
           summary: input.summary,
@@ -855,6 +1055,12 @@ export class Haven {
           ...(input.worldId ? { worldId: input.worldId } : {}),
         },
       });
+      if (input.fenced && packet.fenced !== true)
+        throw new HavenError(
+          `The server did not confirm strict Handoff fencing. Inspect recorded offer ${packet.id} before retrying.`,
+          { code: "UnsupportedConcurrency", cause: packet },
+        );
+      return packet;
     },
     /** Alias for create(). */
     offer: (input: HandoffCreateInput): Promise<HandoffPacket> =>
@@ -887,6 +1093,9 @@ export class Haven {
         method: "POST",
         body: {
           handoffId: input.handoffId,
+          expectedRevision: input.expectedRevision,
+          expectedGeneration: input.expectedGeneration,
+          operationId: input.operationId,
           claimerAgentId: id.agentId,
           claimerHandle: id.handle,
         },

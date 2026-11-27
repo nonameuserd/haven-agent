@@ -1,3 +1,13 @@
+export {
+  readHostEvents,
+  isHostEvent,
+  type HostEvent,
+  type HostLifecycle,
+  type HostScope,
+  type HostReceipt,
+  type HostReceiptStatus,
+} from "./events.js";
+export { createHandoffOperationId, handoffFence } from "./concurrency.js";
 export { Haven } from "./client.js";
 export {
   formatHavenAuthorization,

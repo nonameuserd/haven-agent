@@ -1288,3 +1288,215 @@ describe("active packet lifecycle driver", () => {
     expect(result.followUp.requiresContinuation).toBe(true);
   });
 });
+
+describe("explicit context transport", () => {
+  it("uses the selected identity boundary and serializes the exact reference once", async () => {
+    const { fetchImpl, calls } = mockFetch(() =>
+      jsonResponse(200, { op: "read", audit: "recorded" }),
+    );
+    const credentials = new MemoryCredentialStore();
+    credentials.set({
+      agentId: "agt_context",
+      handle: "context-reader",
+      signature: "context-signature",
+    });
+    const haven = new Haven({
+      baseUrl: "https://haven.test",
+      credentials,
+      fetch: fetchImpl,
+    });
+    const input = {
+      op: "read" as const,
+      surface: "library" as const,
+      recordId: "lib_example",
+      revision: "a".repeat(64),
+    };
+    await haven.context(input);
+    expect(calls[0].url).toBe("https://haven.test/api/context");
+    expect(JSON.parse(calls[0].init!.body as string)).toEqual(input);
+    expect((calls[0].init!.headers as Record<string, string>).Authorization).toBe(
+      "Haven agt_context context-signature",
+    );
+    haven.gateway.useToken("hvs_context_runtime_token");
+    await haven.gateway.context(input);
+    expect(calls[1].url).toBe("https://haven.test/api/agent-session/context");
+    expect((calls[1].init!.headers as Record<string, string>).Authorization).toBe(
+      "Haven-Session hvs_context_runtime_token",
+    );
+    expect(JSON.parse(calls[1].init!.body as string)).toEqual(input);
+  });
+});
+
+describe("revision-fenced Handoff clients", () => {
+  it("does not publish to a server that omits the strict contract", async () => {
+    const { fetchImpl, calls } = mockFetch(() => jsonResponse(200, { paths: {} }));
+    const haven = new Haven({ baseUrl: "https://haven.test", fetch: fetchImpl });
+    await expect(
+      haven.handoff.create({
+        fenced: true,
+        summary: "Explicit strict work",
+        nextIntent: "Do bounded work",
+      }),
+    ).rejects.toMatchObject({ code: "UnsupportedConcurrency" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].init?.method).toBe("GET");
+  });
+  it("preserves observed counters on a refused mutation without fetching a newer intent", async () => {
+    const { fetchImpl, calls } = mockFetch(() =>
+      jsonResponse(400, {
+        error: "ValidationError",
+        message: "Stale ownership generation",
+      }),
+    );
+    const credentials = new MemoryCredentialStore();
+    credentials.set({
+      agentId: "agt_fenced",
+      handle: "fence-worker",
+      signature: "runtime-signature",
+    });
+    const haven = new Haven({
+      baseUrl: "https://haven.test",
+      fetch: fetchImpl,
+      credentials,
+    });
+    const original = {
+      expectedRevision: 3,
+      expectedGeneration: 2,
+      operationId: `hmo_${"a".repeat(32)}`,
+    };
+    await expect(
+      haven.handoff.transition("complete", "hnd_fenced", original),
+    ).rejects.toBeInstanceOf(HavenApiError);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0].init?.body as string)).toMatchObject(original);
+  });
+});
+
+it("negotiates strict offers and retains the original wire mode", async () => {
+  const { fetchImpl, calls } = mockFetch((call) =>
+    call.url.endsWith("/actions")
+      ? jsonResponse(200, {
+          paths: {
+            "/api/agent-session/handoff": {
+              post: {
+                requestBody: {
+                  content: {
+                    "application/json": {
+                      schema: { properties: { fenced: { type: "boolean" } } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        })
+      : jsonResponse(200, {
+          id: "hnd_negotiated",
+          fenced: true,
+          revision: 0,
+          generation: 0,
+        }),
+  );
+  const credentials = new MemoryCredentialStore();
+  credentials.set({
+    agentId: "agt_fenced",
+    handle: "fence-owner",
+    signature: "runtime-signature",
+  });
+  const haven = new Haven({
+    baseUrl: "https://haven.test",
+    credentials,
+    fetch: fetchImpl,
+  });
+  expect(
+    (
+      await haven.handoff.create({
+        fenced: true,
+        summary: "Bounded strict work",
+        nextIntent: "Review a parser change",
+      })
+    ).fenced,
+  ).toBe(true);
+  expect(calls).toHaveLength(2);
+  expect(JSON.parse(calls[1].init?.body as string).fenced).toBe(true);
+});
+
+describe("host stream and general chat", () => {
+  it("authenticates SSE with the retained session without putting its token in scope JSON", async () => {
+    const { fetchImpl, calls } = mockFetch(
+      () =>
+        new Response("event: heartbeat\ndata: {}\n\n", {
+          headers: { "content-type": "text/event-stream" },
+        }),
+    );
+    const haven = new Haven({ fetch: fetchImpl });
+    haven.gateway.useToken("hvs_host_retained_token");
+    for await (const _event of haven.host.events({ worldId: "world_group" }))
+      throw new Error("heartbeat is not work");
+    expect((calls[0]?.init?.headers as Record<string, string>).Authorization).toBe(
+      "Haven-Session hvs_host_retained_token",
+    );
+    expect(calls[0]?.init?.body).toBe(JSON.stringify({ worldId: "world_group" }));
+  });
+  it("sends chat with the authenticated actor and explicit recipient capability", async () => {
+    const { fetchImpl, calls } = mockFetch(() =>
+      jsonResponse(200, { id: "msg_response" }),
+    );
+    const haven = new Haven({
+      fetch: fetchImpl,
+      handle: "sender",
+      agentId: "agt_sender",
+      signature: "sig_sender",
+    });
+    await haven.courier.send({
+      toHandle: "recipient",
+      toAgentId: "agt_recipient",
+      subject: "Bounded question",
+      body: "Please review the recorded result.",
+      capabilityToken: "cap_message:agent:recipient_fixture",
+    });
+    const payload = JSON.parse(String(calls[0]?.init?.body));
+    expect(payload.fromHandle).toBe("sender");
+    expect(payload.fromAgentId).toBe("agt_sender");
+    expect(payload.toHandle).toBe("recipient");
+    expect(calls[0]?.url).toMatch(/\/api\/courier\/send$/);
+  });
+});
+
+it("retries only proven lifecycle rollbacks and never replays an uncertain store write", async () => {
+  let attempts = 0;
+  const { fetchImpl } = mockFetch(() =>
+    ++attempts === 1
+      ? jsonResponse(400, {
+          error: "ValidationError",
+          code: "CoordinationConflict",
+          message: "Rolled back",
+        })
+      : jsonResponse(200, {
+          handle: "worker",
+          gardenSessionId: "grd_owned",
+          status: "running",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+          scope: { inbox: true },
+        }),
+  );
+  const haven = new Haven({
+    fetch: fetchImpl,
+    handle: "worker",
+    agentId: "agt_worker",
+    signature: "sig_worker",
+  });
+  expect((await haven.host.lifecycle()).gardenSessionId).toBe("grd_owned");
+  expect(attempts).toBe(2);
+  const uncertain = mockFetch(() =>
+    jsonResponse(503, { error: "DatabaseError", message: "Unavailable" }),
+  );
+  const other = new Haven({
+    fetch: uncertain.fetchImpl,
+    handle: "worker",
+    agentId: "agt_worker",
+    signature: "sig_worker",
+  });
+  await expect(other.host.lifecycle()).rejects.toThrow("Unavailable");
+  expect(uncertain.calls).toHaveLength(1);
+});

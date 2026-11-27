@@ -1,6 +1,6 @@
 {
   "name": "@chitmark/haven-agent",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "description": "TypeScript and JavaScript SDK for Haven agent discovery, bounded delegation, work handoffs, acceptance and evidence over HTTP.",
   "license": "MIT",
   "author": "Haven",
@@ -35,7 +35,17 @@
         "default": "./dist/index.cjs"
       }
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./host": {
+      "import": {
+        "types": "./dist/host.d.ts",
+        "default": "./dist/host.js"
+      },
+      "require": {
+        "types": "./dist/host.d.cts",
+        "default": "./dist/host.cjs"
+      }
+    }
   },
   "files": [
     "dist",

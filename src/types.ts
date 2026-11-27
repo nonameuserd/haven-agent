@@ -216,6 +216,7 @@ export type LookingGapNext = {
 };
 
 export type HandoffCreateInput = {
+  fenced?: boolean;
   summary: string;
   nextIntent: string;
   gardenSessionId?: string;
@@ -279,6 +280,16 @@ export type HandoffCreateInput = {
 };
 
 export type HandoffPacket = {
+  fenced?: boolean;
+  revision?: number;
+  generation?: number;
+  lastMutation?: {
+    id: string;
+    kind: string;
+    actor: string;
+    fromRevision: number;
+    fromGeneration: number;
+  };
   id: string;
   fromHandle: string;
   fromAgentId: string;
@@ -379,6 +390,9 @@ export type HandoffRefineResult = HandoffPacket & {
 };
 
 export type HandoffClaimInput = {
+  expectedRevision?: number;
+  expectedGeneration?: number;
+  operationId?: string;
   handoffId: string;
   claimerHandle?: string;
   claimerAgentId?: string;
@@ -929,6 +943,10 @@ export type GatewayHandoffOp =
 
 /** Gateway handoff body (identity from session). */
 export type GatewayHandoffInput = {
+  expectedRevision?: number;
+  expectedGeneration?: number;
+  operationId?: string;
+  fenced?: boolean;
   op: GatewayHandoffOp;
   /** Bounded authoritative lifecycle wait, 0-30 seconds. */
   timeoutSeconds?: number;
@@ -1658,4 +1676,74 @@ export type HandoffWaitResult = GatewayActionResult & {
   timedOut: boolean;
   nextToolCall?: { name: "handoff"; arguments: GatewayHandoffInput };
   feedback?: { id: string; summary: string; createdAt: string };
+};
+
+/** Deliberate context publication. Trail is author-only; Board and Library are public. */
+export type ContextReference = {
+  surface: "library" | "board" | "trail";
+  recordId: string;
+  revision: string;
+};
+export type ContextInput =
+  | { op: "publish"; audience: "public"; title: string; origin: string; body: string }
+  | {
+      op: "read";
+      surface: ContextReference["surface"];
+      recordId: string;
+      revision?: string;
+    }
+  | ({ op: "acknowledge" } & ContextReference);
+export type ContextReceipt = ContextReference & {
+  id: string;
+  actorAgentId: string;
+  actorHandle: string;
+  action: "read" | "acknowledge";
+  audience: "public" | "author";
+  createdAt: string;
+  expiresAt: string;
+};
+export type ContextResult =
+  | {
+      op: "publish";
+      item: {
+        id: string;
+        contentHash: string;
+        audience: "public";
+        status: "pending" | "approved" | "rejected";
+        expiresAt: string;
+      };
+      audit: "recorded" | "unavailable";
+      meaning: string;
+    }
+  | {
+      op: "read";
+      publication: {
+        reference: ContextReference;
+        audience: "public" | "author";
+        author: { agentId: string; handle: string };
+        provenance: { origin: string; contentHash: string };
+        content: string;
+        approval: "operator_approved" | "not_applicable";
+        approvalRecord: {
+          reviewer: string;
+          basis: "declared" | "unnamed key holder";
+          decidedAt: string;
+        } | null;
+        expiresAt: string;
+      };
+      receipt: ContextReceipt;
+      audit: "recorded" | "unavailable";
+    }
+  | {
+      op: "acknowledge";
+      receipt: ContextReceipt;
+      audit: "recorded" | "unavailable";
+      meaning: string;
+    };
+
+/** Not a credential or resource lease: compare these counters to the observed packet. */
+export type HandoffMutationFence = {
+  expectedRevision: number;
+  expectedGeneration: number;
+  operationId: string;
 };
